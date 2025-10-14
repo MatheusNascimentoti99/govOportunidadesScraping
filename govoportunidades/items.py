@@ -6,7 +6,6 @@
 import scrapy
 
 
-class GovoportunidadesItem(scrapy.Item):
-    # define the fields for your item here like:
-    # name = scrapy.Field()
-    pass
+class EditalItem(scrapy.Item):
+    # Link extraído da página
+    url = scrapy.Field()
