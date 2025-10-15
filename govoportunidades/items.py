@@ -9,3 +9,7 @@ import scrapy
 class EditalItem(scrapy.Item):
     # Link extraído da página
     url = scrapy.Field()
+
+class EditalExtractor(scrapy.Item):
+    url = scrapy.Field()
+    text = scrapy.Field()
