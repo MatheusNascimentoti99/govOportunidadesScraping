@@ -1,0 +1,3 @@
+pymongo=4.15.3
+scrapy=2.13
+pdfplumber=0.11.7
