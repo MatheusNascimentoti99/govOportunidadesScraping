@@ -1,4 +1,8 @@
 # Scrapy settings for govoportunidades project
+
+# Keywords to search for in the scraped content
+KEY_WORDS = ["BAHIA", "SALVADOR", "SERGIPE", 'ARACAJU']
+
 #
 # For simplicity, this file contains only settings considered important or
 # commonly used. You can find more settings consulting the documentation:
@@ -11,7 +15,8 @@ BOT_NAME = "govoportunidades"
 
 SPIDER_MODULES = ["govoportunidades.spiders"]
 NEWSPIDER_MODULE = "govoportunidades.spiders"
-
+# MONGO_URI = "mongodb://localhost:27017"
+# MONGO_DATABASE = "govoportunidades"
 ADDONS = {}
 
 
@@ -58,9 +63,9 @@ DOWNLOAD_DELAY = 1
 
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
-#ITEM_PIPELINES = {
-#    "govoportunidades.pipelines.GovoportunidadesPipeline": 300,
-#}
+# ITEM_PIPELINES = {
+#    "govoportunidades.pipelines.MongoPipeline": 300,
+# }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html

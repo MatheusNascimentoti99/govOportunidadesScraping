@@ -1,7 +1,7 @@
 import re
+import io
 import scrapy
 import pdfplumber
-import io
 from govoportunidades.items import EditalExtractor
 
 class EditalSpider(scrapy.Spider):
@@ -9,28 +9,32 @@ class EditalSpider(scrapy.Spider):
     allowed_domains = ["oportunidades.sigepe.gov.br"]
     start_urls = ["https://oportunidades.sigepe.gov.br/oportunidades-portal/api/html/"]
 
-
     def parse(self, response):
-        # Extrai todos os onclicks de tags <a>
-        actions = response.css('a.text-blue-warm-vivid-80::attr(onclick)').getall()
-
-        # Normaliza para URLs absolutas e filtra valores vazios/anchors/javascript
-        links = set()
-        for action in actions:
-                if action and "window.open" in action:
-                    # Extract the ID from "window.open(this.href+ID,'popup','width=800,height=600');return false;"
-                    for match in [re.search(r"this\.href\+(\w+)", action)]:
-                        if match:
-                            links.add(response.urljoin(match.group(1)))
         
-        yield from response.follow_all(links, self.parse_edital)
+        # Extrai todos os onclicks de tags <a> que estão dentro de um ancestral com um span "Encerra em:"
+        actions = set()
+        for a in response.xpath('//a'):
+            # pega os três primeiros ancestrais
+            ancestors = a.xpath('ancestor::*[position() <= 3]')
+            
+            # verifica se algum ancestral tem um span com o texto
+            if ancestors.xpath('.//span[contains(., "Encerra em:")]'):
+                for match in [re.search(r"this\.href\+(\w+)", a.xpath('@onclick').get())]:
+                        if match:
+                            actions.add(response.urljoin(match.group(1)))
+
+        yield from response.follow_all(actions, self.parse_edital)
 
     def parse_edital(self, response):
         # retrieve all links in the first occurrence div.br-list
         edital_link = response.css("div.br-list a::attr(href)").get()
 
-        if edital_link:
-            yield response.follow(edital_link, callback=self.parse_pdf, cb_kwargs=dict(main_url=response.url))
+        if not edital_link:
+            return
+
+        pdf_url = response.urljoin(edital_link)
+
+        yield response.follow(pdf_url, callback=self.parse_pdf, cb_kwargs=dict(main_url=response.url))
 
     def parse_pdf(self, response, main_url):
         # Check and get the PDF response
@@ -46,8 +50,11 @@ class EditalSpider(scrapy.Spider):
             for page in pdf.pages:
                 text += page.extract_text() or ""
 
-            if not text.strip():
-                self.logger.warning(f"No text extracted from PDF at {response.url}")
-                return
-            # Yield the extracted text as an item
-            yield EditalExtractor(url=main_url, text=text)
+        if not text.strip():
+            self.logger.warning(f"No text extracted from PDF at {response.url}")
+            return
+
+        if self.settings.get("KEY_WORDS") and not any(keyword.lower() in text.lower() for keyword in self.settings.get("KEY_WORDS")):
+            return
+        # Yield o conteúdo extraído
+        yield EditalExtractor(url=main_url, text=text)
