@@ -4,5 +4,6 @@ dbs
 *.json
 *.pid
 *.db
+*.log
 .env
 !.env.example
