@@ -4,9 +4,6 @@ import os
 load_dotenv()
 # Scrapy settings for govoportunidades project
 
-# Keywords to search for in the scraped content
-KEY_WORDS = os.getenv("SCRAPY_KEY_WORDS", "").split(",")
-
 #
 # For simplicity, this file contains only settings considered important or
 # commonly used. You can find more settings consulting the documentation:
@@ -68,7 +65,10 @@ DOWNLOAD_DELAY = 1
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
+   "govoportunidades.pipelines.NotificationDedupPipeline": 150,
+   "govoportunidades.pipelines.SQLitePipeline": 200,
    "govoportunidades.pipelines.NotificationPipeline": 300,
+   # "govoportunidades.pipelines.MongoDBPipeline": 300,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
@@ -102,3 +102,12 @@ MAIL_PASS = os.getenv("SCRAPY_MAIL_PASS")
 MAIL_FROM = os.getenv("SCRAPY_MAIL_FROM", MAIL_USER)
 MAIL_TLS = True
 MAIL_SSL = False
+
+# Email addresses to send notifications to
+MAIL_TO = os.getenv("SCRAPY_MAIL_TO", "").split(",")
+
+# Keywords to search for in the scraped content
+KEY_WORDS = os.getenv("SCRAPY_KEY_WORDS", "").split(",")
+
+# Path to the SQLite database file
+EDITAIS_DB_PATH = os.getenv("EDITAIS_DB_PATH", "editais.db")

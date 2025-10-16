@@ -3,5 +3,6 @@ mp_env
 dbs
 *.json
 *.pid
+*.db
 .env
 !.env.example

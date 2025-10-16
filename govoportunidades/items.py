@@ -13,3 +13,4 @@ class EditalItem(scrapy.Item):
 class EditalExtractor(scrapy.Item):
     url = scrapy.Field()
     text = scrapy.Field()
+    matched_keywords = scrapy.Field()

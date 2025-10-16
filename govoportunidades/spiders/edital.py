@@ -53,8 +53,6 @@ class EditalSpider(scrapy.Spider):
         if not text.strip():
             self.logger.warning(f"No text extracted from PDF at {response.url}")
             return
-
-        if self.settings.get("KEY_WORDS") and not any(keyword.lower() in text.lower() for keyword in self.settings.get("KEY_WORDS")):
-            return
+        
         # Yield o conteúdo extraído
         yield EditalExtractor(url=main_url, text=text)
