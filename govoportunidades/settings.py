@@ -1,7 +1,11 @@
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 # Scrapy settings for govoportunidades project
 
 # Keywords to search for in the scraped content
-KEY_WORDS = ["BAHIA", "SALVADOR", "SERGIPE", 'ARACAJU']
+KEY_WORDS = os.getenv("SCRAPY_KEY_WORDS", "").split(",")
 
 #
 # For simplicity, this file contains only settings considered important or
@@ -63,9 +67,9 @@ DOWNLOAD_DELAY = 1
 
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
-# ITEM_PIPELINES = {
-#    "govoportunidades.pipelines.MongoPipeline": 300,
-# }
+ITEM_PIPELINES = {
+   "govoportunidades.pipelines.NotificationPipeline": 300,
+}
 
 # Enable and configure the AutoThrottle extension (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html
@@ -90,3 +94,11 @@ DOWNLOAD_DELAY = 1
 
 # Set settings whose default value is deprecated to a future-proof value
 FEED_EXPORT_ENCODING = "utf-8"
+
+MAIL_HOST = os.getenv("SCRAPY_MAIL_HOST")
+MAIL_PORT = os.getenv("SCRAPY_MAIL_PORT")
+MAIL_USER = os.getenv("SCRAPY_MAIL_USER")
+MAIL_PASS = os.getenv("SCRAPY_MAIL_PASS")
+MAIL_FROM = os.getenv("SCRAPY_MAIL_FROM", MAIL_USER)
+MAIL_TLS = True
+MAIL_SSL = False
