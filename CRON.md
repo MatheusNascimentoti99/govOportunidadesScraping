@@ -21,12 +21,12 @@ crontab -e
 Execute a cada 2 horas (UTC) e com timeout de 30min via `systemd-run` opcional:
 
 ```
-0 */2 * * * /bin/bash -lc 'cd /home/matheusnascimento/Documentos/govoportunidades && chmod +x scripts/run_crawl.sh && ./scripts/run_crawl.sh'
+0 */2 * * * /bin/bash -lc 'cd caminho/para/projeto && chmod +x scripts/run_crawl.sh && ./scripts/run_crawl.sh'
 ```
 
 Executar diariamente às 08:05 (hora local):
 ```
-5 8 * * * /bin/bash -lc 'cd /home/matheusnascimento/Documentos/govoportunidades && chmod +x scripts/run_crawl.sh && ./scripts/run_crawl.sh'
+5 8 * * * /bin/bash -lc 'cd caminho/para/projeto && chmod +x scripts/run_crawl.sh && ./scripts/run_crawl.sh'
 ```
 
 > Dica: use caminhos absolutos e `bash -lc` para garantir variáveis de ambiente e PATH corretos.
