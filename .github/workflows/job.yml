@@ -2,8 +2,8 @@ name: Scrape Gov Oportunidades
 
 on:
   schedule:
-    # Run every 2 hours
-    - cron: '0 */2 * * *'
+    # Run once a day at 13:00 UTC (10:00 BRT)
+    - cron: '0 13 * * *'
   workflow_dispatch:  # Permite execução manual
 
 jobs:
