@@ -1,0 +1,61 @@
+name: Scrape Gov Oportunidades
+
+on:
+  schedule:
+    # Run every 2 hours
+    - cron: '0 */2 * * *'
+  workflow_dispatch:  # Permite execução manual
+
+jobs:
+  scrape-editais:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Restore SQLite database
+      uses: actions/cache@v3
+      with:
+        path: editais.db
+        key: editais-db-${{ github.run_id }}
+        restore-keys: |
+          editais-db-
+    
+    - name: Run Scrapy spider
+      env:
+        SCRAPY_KEY_WORDS: ${{ secrets.SCRAPY_KEY_WORDS }}
+        SCRAPY_MAIL_TO: ${{ secrets.SCRAPY_MAIL_TO }}
+        SCRAPY_MAIL_HOST: ${{ secrets.SCRAPY_MAIL_HOST }}
+        SCRAPY_MAIL_PORT: ${{ secrets.SCRAPY_MAIL_PORT }}
+        SCRAPY_MAIL_USER: ${{ secrets.SCRAPY_MAIL_USER }}
+        SCRAPY_MAIL_PASS: ${{ secrets.SCRAPY_MAIL_PASS }}
+        SCRAPY_MAIL_FROM: ${{ secrets.SCRAPY_MAIL_FROM }}
+      run: |
+        scrapy crawl edital -s EDITAIS_DB_PATH=./editais.db -O output.json -L INFO
+    
+    - name: Upload scraped data
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: scrapy-output-${{ github.run_number }}
+        path: |
+          output.json
+          editais.db
