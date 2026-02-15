@@ -3,3 +3,4 @@ scrapy==2.13
 pdfplumber==0.11.7
 scrapyd==1.6.0
 python-dotenv==1.1.1
+requests>=2.31.0

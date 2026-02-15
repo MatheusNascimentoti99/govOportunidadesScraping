@@ -11,9 +11,11 @@ try:
     import pymongo  # type: ignore
 except Exception:  # pragma: no cover - pymongo é opcional
     pymongo = None
-import os
+import json
 import sqlite3
 from datetime import datetime, timezone
+
+import requests
 from scrapy.exceptions import DropItem
 
 
@@ -158,16 +160,28 @@ class NotificationPipeline:
 
         url = adapter.get("url") or ""
         text = adapter.get("text") or ""
+        summary = adapter.get("summary") or ""
         subject = "Gov Oportunidades: Edital encontrado"
-        body = (
-            "Encontramos uma nova oportunidade que corresponde às palavras-chave: "
-            + ", ".join(matched)
-            + "\n\nDetalhes:\n"
-            + f"Link: {url}\n\n"
-            + "Texto inicial:\n"
-            + text[:500]
-            + "\n"
-        )
+
+        if summary:
+            body = (
+                "Encontramos uma nova oportunidade que corresponde às palavras-chave: "
+                + ", ".join(matched)
+                + "\n\n"
+                + summary
+                + "\n\n"
+                + f"Link: {url}\n"
+            )
+        else:
+            body = (
+                "Encontramos uma nova oportunidade que corresponde às palavras-chave: "
+                + ", ".join(matched)
+                + "\n\nDetalhes:\n"
+                + f"Link: {url}\n\n"
+                + "Texto inicial:\n"
+                + text[:500]
+                + "\n"
+            )
         try:
             self.mailer.send(to=self.mail_to, subject=subject, body=body)
         except Exception as e:
@@ -225,3 +239,93 @@ class NotificationDedupPipeline:
         except sqlite3.Error as e:
             spider.logger.error(f"NotificationDedupPipeline: falha ao consultar DB: {e}")
         return item
+
+
+class OpenRouterResumePipeline:
+    """Chama a API do OpenRouter para resumir o texto do edital em português.
+
+    Insere o resumo no campo ``summary`` do item para que o
+    ``NotificationPipeline`` possa incluí-lo no corpo do e-mail.
+    Funciona apenas para itens que já possuem ``matched_keywords``.
+    """
+
+    OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    def __init__(self, api_key: str, model: str, max_text_length: int):
+        self.api_key = api_key
+        self.model = model
+        self.max_text_length = max_text_length
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(
+            api_key=crawler.settings.get("OPENROUTER_API_KEY", ""),
+            model=crawler.settings.get("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free"),
+            max_text_length=crawler.settings.getint("OPENROUTER_MAX_TEXT_LENGTH", 4000),
+        )
+
+    def process_item(self, item, spider):
+        adapter = ItemAdapter(item)
+
+        # Só resume itens que tiverem keywords correspondentes
+        if not adapter.get("matched_keywords"):
+            return item
+
+        if not self.api_key:
+            spider.logger.warning(
+                "OpenRouterResumePipeline: OPENROUTER_API_KEY não configurada; "
+                "pulando resumo."
+            )
+            return item
+
+        text = (adapter.get("text") or "")[:self.max_text_length]
+        if not text.strip():
+            return item
+
+        try:
+            summary = self._summarize(text)
+            adapter["summary"] = summary
+            spider.logger.info(
+                f"OpenRouterResumePipeline: resumo gerado ({len(summary)} chars) "
+                f"para {adapter.get('url')}"
+            )
+        except Exception as e:
+            spider.logger.error(
+                f"OpenRouterResumePipeline: falha ao resumir edital: {e}"
+            )
+
+        return item
+
+    def _summarize(self, text: str) -> str:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Você é um assistente especializado resumo de textos de oportunidades de vagas"
+                        "do governo brasileiro. Resuma o texto do edital de forma "
+                        "clara e objetiva em português, destacando: objeto da "
+                        "oportunidade, local, data de abertura, data de fechamento, "
+                        "das propostas, e requisitos principais. Máximo 300 palavras."
+                        "O texto deve ser formatado para e-mail."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Resuma o seguinte edital:\n\n{text}",
+                },
+            ],
+        }
+        response = requests.post(
+            self.OPENROUTER_URL,
+            headers=headers,
+            data=json.dumps(payload),
+            timeout=60,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"].strip()

@@ -67,8 +67,9 @@ DOWNLOAD_DELAY = 2
 ITEM_PIPELINES = {
    "govoportunidades.pipelines.NotificationDedupPipeline": 150,
    "govoportunidades.pipelines.SQLitePipeline": 200,
+   "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
    "govoportunidades.pipelines.NotificationPipeline": 300,
-   # "govoportunidades.pipelines.MongoDBPipeline": 300,
+   # "govoportunidades.pipelines.MongoDBPipeline": 400,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
@@ -111,3 +112,8 @@ KEY_WORDS = os.getenv("SCRAPY_KEY_WORDS", "").split(",")
 
 # Path to the SQLite database file
 EDITAIS_DB_PATH = os.getenv("EDITAIS_DB_PATH", "editais.db")
+
+# OpenRouter API settings for edital text summarization
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free")
+OPENROUTER_MAX_TEXT_LENGTH = int(os.getenv("OPENROUTER_MAX_TEXT_LENGTH", "4000"))
