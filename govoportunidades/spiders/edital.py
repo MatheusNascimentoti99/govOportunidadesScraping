@@ -53,15 +53,11 @@ class EditalSpider(scrapy.Spider):
         import io
         import pdfplumber
     
-        try:
-            with pdfplumber.open(io.BytesIO(response.body)) as pdf:
-                text = ""
-                for page in pdf.pages:
-                    text += page.extract_text() or ""
-        except Exception as e:
-            self.logger.error(f"Erro ao abrir PDF: {e} | URL: {response.url}")
-            return
-    
+        with pdfplumber.open(io.BytesIO(response.body)) as pdf:
+            text = ""
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+
         if not text.strip():
             self.logger.warning(f"No text extracted from PDF at {response.url}")
             return
