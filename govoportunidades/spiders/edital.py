@@ -37,22 +37,33 @@ class EditalSpider(scrapy.Spider):
         yield response.follow(pdf_url, callback=self.parse_pdf, cb_kwargs=dict(main_url=response.url))
 
     def parse_pdf(self, response, main_url):
-        # Check and get the PDF response
         content_type = response.headers.get('Content-Type', b'').decode().lower()
+    
         if 'pdf' not in content_type:
             self.logger.warning(f"Not a PDF! Got {content_type} from {response.url}")
-            self.logger.debug(response.text[:500])  # show the start of the response
+            self.logger.debug(response.text[:500])
             return
-
-        # Download and extract text from the PDF
-        with pdfplumber.open(io.BytesIO(response.body)) as pdf:
-            text = ""
-            for page in pdf.pages:
-                text += page.extract_text() or ""
-
+    
+        # 🔴 Validação REAL de PDF
+        if not response.body.startswith(b'%PDF'):
+            self.logger.error(f"Invalid PDF content at {response.url}")
+            self.logger.debug(response.text[:500])
+            return
+    
+        import io
+        import pdfplumber
+    
+        try:
+            with pdfplumber.open(io.BytesIO(response.body)) as pdf:
+                text = ""
+                for page in pdf.pages:
+                    text += page.extract_text() or ""
+        except Exception as e:
+            self.logger.error(f"Erro ao abrir PDF: {e} | URL: {response.url}")
+            return
+    
         if not text.strip():
             self.logger.warning(f"No text extracted from PDF at {response.url}")
             return
-        
-        # Yield o conteúdo extraído
+    
         yield EditalExtractor(url=main_url, text=text)
