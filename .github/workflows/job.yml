@@ -48,6 +48,9 @@ jobs:
         SCRAPY_MAIL_USER: ${{ secrets.SCRAPY_MAIL_USER }}
         SCRAPY_MAIL_PASS: ${{ secrets.SCRAPY_MAIL_PASS }}
         SCRAPY_MAIL_FROM: ${{ secrets.SCRAPY_MAIL_FROM }}
+        OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        OPENROUTER_MAX_TEXT_LENGTH: ${{ secrets.OPENROUTER_MAX_TEXT_LENGTH }}
+        OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
       run: |
         scrapy crawl edital -s EDITAIS_DB_PATH=./editais.db -O output.json -L INFO
     
