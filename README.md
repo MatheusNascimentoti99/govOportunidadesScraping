@@ -42,8 +42,8 @@ Coletor (Scrapy) para identificar oportunidades governamentais (editais) no port
 ## Instalação local (venv)
 ```fish
 # Dentro da pasta do projeto
-python3 -m venv mp_env
-source mp_env/bin/activate.fish
+python3 -m venv .venv
+source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
