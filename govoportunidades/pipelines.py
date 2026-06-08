@@ -161,7 +161,7 @@ class NotificationPipeline:
         url = adapter.get("url") or ""
         text = adapter.get("text") or ""
         summary = adapter.get("summary") or ""
-        subject = "Gov Oportunidades: Edital encontrado"
+        subject = "Nova oportunidade encontrada: " + ", ".join(matched)
 
         if summary:
             body = (
