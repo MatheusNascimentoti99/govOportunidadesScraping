@@ -2,7 +2,8 @@
 
 Coletor (Scrapy) para identificar oportunidades governamentais (editais) no portal do SIGEPE, extrair links e texto de PDFs, filtrar por palavras‑chave e notificar por e‑mail. Possui deduplicação entre execuções (SQLite) e agendamento via cron.
 
-![alt text](docs/usage.png)
+<img width="1372" height="432" alt="image" src="https://github.com/user-attachments/assets/8eaef6de-88de-4976-8d78-5b6ee6178a31" />
+
 
 ## Visão geral
 - Spider `edital` acessa a página inicial, segue para páginas de edital e baixa o PDF associado.
