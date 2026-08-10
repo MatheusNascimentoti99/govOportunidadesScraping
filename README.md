@@ -39,32 +39,42 @@ Coletor (Scrapy) para identificar oportunidades governamentais (editais) no port
 - Python 3.10+
 - Linux/macOS (Windows via WSL/Docker)
 
-## Instalação local (venv)
-```fish
-# Dentro da pasta do projeto
-python3 -m venv .venv
+## Como começar (Instalação local)
+
+1. **Clone ou faça um fork do repositório:**
+```bash
+git clone https://github.com/SEU_USUARIO/govOportunidadesScraping.git
+cd govOportunidadesScraping
+```
+
+2. **Crie e ative um ambiente virtual:**
+```bash
+python -m venv .venv
+
+# No Linux/macOS
 source .venv/bin/activate
+
+# No Windows
+.venv\Scripts\activate
+```
+
+3. **Instale as dependências:**
+```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## Configuração (.env)
-Crie um arquivo `.env` na raiz com, por exemplo:
-```ini
-# Palavras-chave separadas por vírgula
-SCRAPY_KEY_WORDS="engenharia,civil,TI,contrato"
+4. **Configuração (.env):**
+Copie o arquivo de exemplo para criar o seu arquivo `.env`:
+```bash
+# No Linux/macOS
+cp .env.example .env
 
-# Notificação por e-mail
-SCRAPY_MAIL_TO="destino1@exemplo.com,destino2@exemplo.com"
-SCRAPY_MAIL_HOST="smtp.gmail.com"
-SCRAPY_MAIL_PORT="587"
-SCRAPY_MAIL_USER="seu.email@gmail.com"
-SCRAPY_MAIL_PASS="SUA_SENHA_DE_APP"  # veja o tutorial Gmail abaixo
-SCRAPY_MAIL_FROM="seu.email@gmail.com"
-
-# Caminho do banco de dados SQLite
-EDITAIS_DB_PATH=editais.db
+# No Windows
+copy .env.example .env
 ```
+
+Abra o arquivo `.env` recém-criado e preencha-o com suas informações (como palavras-chave, credenciais de e-mail e API do OpenRouter, se for usar sumarização). O arquivo `.env.example` já possui comentários explicando cada variável e dados de exemplo.
 
 ## Executando
 - Execução simples (exporta JSON para `saida.json`):
@@ -76,7 +86,30 @@ Observações importantes:
 - Por padrão `ROBOTSTXT_OBEY = True`. Se a origem bloquear o scraping via robots.txt, o spider respeitará.
 - O `NotificationDedupPipeline` descarta itens cujo URL já está em `matching_editais` (evita reenvio de e-mail).
 
-## Cron
+## GitHub Actions (Execução automatizada e gratuita)
+
+O projeto já inclui um workflow (`.github/workflows/job.yml`) para rodar o coletor de forma automática no GitHub Actions.
+
+**Passo a passo para ativar:**
+1. Faça o **fork** deste repositório para a sua conta do GitHub (caso ainda não o tenha feito).
+2. Acesse a aba **Settings** (Configurações) do seu repositório.
+3. No menu lateral, acesse **Secrets and variables** > **Actions**.
+4. Clique no botão **New repository secret** e cadastre as credenciais do seu projeto (as mesmas do `.env` local):
+   - `SCRAPY_KEY_WORDS`
+   - `SCRAPY_MAIL_TO`
+   - `SCRAPY_MAIL_HOST`
+   - `SCRAPY_MAIL_PORT`
+   - `SCRAPY_MAIL_USER`
+   - `SCRAPY_MAIL_PASS`
+   - `SCRAPY_MAIL_FROM`
+   - *(Opcional - caso use sumarização)*: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` e `OPENROUTER_MAX_TEXT_LENGTH`.
+5. Acesse a aba **Actions** no topo do repositório e confirme a ativação dos fluxos, clicando no botão verde se for solicitado.
+6. **Agendamento padrão:** O scraper roda todos os dias às 10:00 da manhã (13:00 UTC).
+7. **Execução manual:** Para testar, vá na aba **Actions**, selecione `Scrape Gov Oportunidades`, clique em **Run workflow** e rode.
+
+> **Nota:** O banco de dados SQLite (`editais.db`) será cacheado entre as execuções (evitando envios repetidos). Na página de resultados de cada execução da Action, você poderá baixar o `output.json` e o `editais.db` em **Artifacts**.
+
+## Cron (Execução local)
 Há um guia dedicado em `CRON.md` com exemplos. O script `scripts/run_crawl.sh` já implementa:
 - Lock (`.crawl.lock`) para evitar concorrência
 - Logs em `logs/cron/crawl.log`
