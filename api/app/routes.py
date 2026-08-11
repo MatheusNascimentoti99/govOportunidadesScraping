@@ -1,119 +1,28 @@
 """
-API FastAPI – Serviço de Subscrição de Editais
-================================================
-Endpoints públicos (abertos):
-  POST /api/subscribe          – Cadastra e-mail + palavras-chave
-  GET  /api/unsubscribe        – Cancela assinatura via token de e-mail
-
-Endpoints internos (protegidos por X-API-Key):
-  GET  /api/internal/subscribers                   – Lista assinantes ativos
-  POST /api/internal/notifications/check-dedup    – Verifica se edital já foi notificado
-  POST /api/internal/notifications/log            – Registra notificação enviada
+routes.py – Todos os endpoints FastAPI (públicos + internos).
 """
-
 from __future__ import annotations
 
 import hashlib
-import os
 import secrets
 import smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 
-import psycopg2
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr, field_validator
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
-load_dotenv()
+from .models import get_db
+from .schemas import DedupCheckRequest, NotificationLogRequest, SubscribeRequest
+from .settings import API_SECRET_KEY, APP_BASE_URL, SMTP_FROM, SMTP_HOST, SMTP_PASS, SMTP_PORT, SMTP_USER
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Configurações
-# ─────────────────────────────────────────────────────────────────────────────
-
-DATABASE_URL: str = os.getenv("DATABASE_URL", "")
-API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", "")
-
-SMTP_HOST: str = os.getenv("SCRAPY_MAIL_HOST", "smtp.gmail.com")
-SMTP_PORT: int = int(os.getenv("SCRAPY_MAIL_PORT", "587"))
-SMTP_USER: str = os.getenv("SCRAPY_MAIL_USER", "")
-SMTP_PASS: str = os.getenv("SCRAPY_MAIL_PASS", "")
-SMTP_FROM: str = os.getenv("SCRAPY_MAIL_FROM", SMTP_USER)
-
-APP_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FastAPI app
-# ─────────────────────────────────────────────────────────────────────────────
-
-app = FastAPI(
-    title="GovOportunidades – Subscription API",
-    description="API de subscrição de editais governamentais.",
-    version="1.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
+router = APIRouter()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Banco de Dados (PostgreSQL)
+# Segurança
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_db():
-    """FastAPI dependency: abre conexão psycopg2, garante schema e fecha no fim."""
-    if not DATABASE_URL:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="DATABASE_URL não configurada.",
-        )
-    conn = psycopg2.connect(DATABASE_URL)
-    _ensure_schema(conn)
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-def _ensure_schema(conn) -> None:
-    """Cria tabelas se não existirem (idempotente)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS subscribers (
-                id                SERIAL PRIMARY KEY,
-                email             TEXT NOT NULL UNIQUE,
-                keywords          TEXT NOT NULL,
-                unsubscribe_token TEXT NOT NULL UNIQUE,
-                active            BOOLEAN NOT NULL DEFAULT TRUE,
-                created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS notification_log (
-                id               SERIAL PRIMARY KEY,
-                edital_url       TEXT NOT NULL,
-                subscriber_email TEXT NOT NULL,
-                sent_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE (edital_url, subscriber_email)
-            );
-            """
-        )
-        conn.commit()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Segurança – API Key interna
-# ─────────────────────────────────────────────────────────────────────────────
-
-def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
+def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> None:
     if not API_SECRET_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -124,33 +33,6 @@ def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="API Key inválida.",
         )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Schemas Pydantic
-# ─────────────────────────────────────────────────────────────────────────────
-
-class SubscribeRequest(BaseModel):
-    email: EmailStr
-    keywords: str
-
-    @field_validator("keywords")
-    @classmethod
-    def keywords_not_empty(cls, v: str) -> str:
-        cleaned = v.strip()
-        if not cleaned:
-            raise ValueError("keywords não pode ser vazio.")
-        return cleaned
-
-
-class DedupCheckRequest(BaseModel):
-    edital_url: str
-    subscriber_email: str
-
-
-class NotificationLogRequest(BaseModel):
-    edital_url: str
-    subscriber_email: str
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -192,7 +74,7 @@ def _send_confirmation_email(email: str, keywords: str, token: str) -> None:
 # Endpoints Públicos
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/subscribe", status_code=status.HTTP_201_CREATED)
+@router.post("/api/subscribe", status_code=status.HTTP_201_CREATED)
 def subscribe(body: SubscribeRequest, conn=Depends(get_db)):
     """Cadastra um novo assinante ou atualiza as palavras-chave de um existente."""
     token = _generate_unsubscribe_token(body.email)
@@ -217,7 +99,7 @@ def subscribe(body: SubscribeRequest, conn=Depends(get_db)):
     return {"message": "Inscrição realizada com sucesso!", "email": body.email}
 
 
-@app.get("/api/unsubscribe")
+@router.get("/api/unsubscribe")
 def unsubscribe(
     token: str = Query(..., description="Token de cancelamento recebido no e-mail"),
     conn=Depends(get_db),
@@ -240,10 +122,10 @@ def unsubscribe(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Endpoints Internos (usados pelo Scrapy via GitHub Actions)
+# Endpoints Internos (Scrapy / GitHub Actions)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.get("/api/internal/subscribers", dependencies=[Depends(verify_api_key)])
+@router.get("/api/internal/subscribers", dependencies=[Depends(verify_api_key)])
 def list_subscribers(conn=Depends(get_db)):
     """Retorna a lista de todos os assinantes ativos com suas palavras-chave."""
     with conn.cursor() as cur:
@@ -262,7 +144,7 @@ def list_subscribers(conn=Depends(get_db)):
     return {"subscribers": subscribers, "total": len(subscribers)}
 
 
-@app.post("/api/internal/notifications/check-dedup", dependencies=[Depends(verify_api_key)])
+@router.post("/api/internal/notifications/check-dedup", dependencies=[Depends(verify_api_key)])
 def check_dedup(body: DedupCheckRequest, conn=Depends(get_db)):
     """
     Verifica se uma notificação já foi enviada para o par (edital_url, subscriber_email).
@@ -278,7 +160,7 @@ def check_dedup(body: DedupCheckRequest, conn=Depends(get_db)):
     return {"already_sent": already_sent}
 
 
-@app.post(
+@router.post(
     "/api/internal/notifications/log",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(verify_api_key)],
@@ -295,7 +177,6 @@ def log_notification(body: NotificationLogRequest, conn=Depends(get_db)):
             (body.edital_url, body.subscriber_email),
         )
         conn.commit()
-
     return {"message": "Notificação registrada com sucesso."}
 
 
@@ -303,6 +184,6 @@ def log_notification(body: NotificationLogRequest, conn=Depends(get_db)):
 # Health check
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.get("/api/health")
+@router.get("/api/health")
 def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
