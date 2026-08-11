@@ -1,0 +1,13 @@
+__pycache__
+*.pyc
+*.pyo
+.env
+.git
+.github
+.pytest_cache
+mp_env
+*.db
+*.log
+logs/
+out/
+docs/

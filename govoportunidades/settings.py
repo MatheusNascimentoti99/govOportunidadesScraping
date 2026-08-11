@@ -69,6 +69,8 @@ ITEM_PIPELINES = {
    "govoportunidades.pipelines.SQLitePipeline": 200,
    "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
    "govoportunidades.pipelines.NotificationPipeline": 300,
+   # Pipeline API-centric (substitui NotificationPipeline para assinantes via API)
+   # "govoportunidades.pipelines.SubscriberNotificationPipeline": 350,
    # "govoportunidades.pipelines.MongoDBPipeline": 400,
 }
 
@@ -117,3 +119,7 @@ EDITAIS_DB_PATH = os.getenv("EDITAIS_DB_PATH", "editais.db")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free")
 OPENROUTER_MAX_TEXT_LENGTH = int(os.getenv("OPENROUTER_MAX_TEXT_LENGTH", "4000"))
+
+# API FastAPI (Vercel) – configurações para o SubscriberNotificationPipeline
+API_BASE_URL = os.getenv("API_BASE_URL", "").strip()
+API_SECRET_KEY = os.getenv("API_SECRET_KEY", "").strip()
