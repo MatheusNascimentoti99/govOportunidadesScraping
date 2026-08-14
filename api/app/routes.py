@@ -1,5 +1,5 @@
 """
-routes.py – Todos os endpoints FastAPI (públicos + internos).
+routes.py – Todos os endpoints FastAPI (públicos + internos) com documentação OpenAPI completa.
 """
 from __future__ import annotations
 
@@ -14,9 +14,17 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from .models import get_db, get_unsubscribe_token_by_email
 from .schemas import (
     DedupCheckRequest,
+    DedupCheckResponse,
+    ErrorResponse,
+    HealthResponse,
     NotificationLogRequest,
+    NotificationLogResponse,
     NotificationSendRequest,
+    NotificationSendResponse,
     SubscribeRequest,
+    SubscribeResponse,
+    SubscribersListResponse,
+    UnsubscribeResponse,
 )
 from .settings import API_SECRET_KEY, APP_BASE_URL, SMTP_FROM, SMTP_HOST, SMTP_PASS, SMTP_PORT, SMTP_USER
 
@@ -27,7 +35,15 @@ router = APIRouter()
 # Segurança
 # ─────────────────────────────────────────────────────────────────────────────
 
-def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> None:
+def verify_api_key(
+    x_api_key: str = Header(
+        ...,
+        alias="X-API-Key",
+        description="Chave secreta compartilhada para autenticação em rotas internas.",
+        examples=["sua-chave-secreta"],
+    ),
+) -> None:
+    """Valida o cabeçalho X-API-Key com a variável API_SECRET_KEY em tempo constante."""
     if not API_SECRET_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -141,7 +157,23 @@ def _send_opportunity_email(
 # Endpoints Públicos
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("/api/subscribe", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/api/subscribe",
+    response_model=SubscribeResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Público - Inscrições"],
+    summary="Cadastrar ou atualizar assinatura de alertas",
+    description=(
+        "Cadastra um endereço de e-mail e uma lista de palavras-chave para monitoramento de editais. "
+        "Se o e-mail já existir, as palavras-chave e o status ativo são atualizados. "
+        "Um e-mail de confirmação é enviado em background com o link exclusivo de cancelamento."
+    ),
+    responses={
+        201: {"description": "Inscrição criada ou atualizada com sucesso.", "model": SubscribeResponse},
+        422: {"description": "Erro de validação nos dados enviados (ex: e-mail inválido ou keywords vazias)."},
+        503: {"description": "Banco de dados indisponível.", "model": ErrorResponse},
+    },
+)
 def subscribe(
     body: SubscribeRequest,
     background_tasks: BackgroundTasks,
@@ -167,9 +199,24 @@ def subscribe(
     return {"message": "Inscrição realizada com sucesso!", "email": body.email}
 
 
-@router.get("/api/unsubscribe")
+@router.get(
+    "/api/unsubscribe",
+    response_model=UnsubscribeResponse,
+    tags=["Público - Inscrições"],
+    summary="Cancelar assinatura de alertas",
+    description="Desativa a assinatura do usuário identificado pelo token exclusivo enviado por e-mail.",
+    responses={
+        200: {"description": "Assinatura cancelada com sucesso.", "model": UnsubscribeResponse},
+        404: {"description": "Token inválido ou assinatura já cancelada.", "model": ErrorResponse},
+        503: {"description": "Banco de dados indisponível.", "model": ErrorResponse},
+    },
+)
 def unsubscribe(
-    token: str = Query(..., description="Token de cancelamento recebido no e-mail"),
+    token: str = Query(
+        ...,
+        description="Token de cancelamento recebido no rodapé do e-mail de notificação.",
+        examples=["a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"],
+    ),
     conn=Depends(get_db),
 ):
     """Cancela a assinatura de um usuário via token."""
@@ -193,7 +240,19 @@ def unsubscribe(
 # Endpoints Internos (Scrapy / GitHub Actions)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/api/internal/subscribers", dependencies=[Depends(verify_api_key)])
+@router.get(
+    "/api/internal/subscribers",
+    response_model=SubscribersListResponse,
+    dependencies=[Depends(verify_api_key)],
+    tags=["Interno - Scraper"],
+    summary="Listar assinantes ativos",
+    description="Retorna a lista de todos os assinantes ativos cadastrados no banco de dados e seus termos de busca normalizados.",
+    responses={
+        200: {"description": "Lista de assinantes retornada com sucesso.", "model": SubscribersListResponse},
+        403: {"description": "API Key inválida.", "model": ErrorResponse},
+        503: {"description": "Serviço ou banco de dados indisponível.", "model": ErrorResponse},
+    },
+)
 def list_subscribers(conn=Depends(get_db)):
     """Retorna a lista de todos os assinantes ativos com suas palavras-chave."""
     with conn.cursor() as cur:
@@ -214,8 +273,21 @@ def list_subscribers(conn=Depends(get_db)):
 
 @router.post(
     "/api/internal/notifications/send",
+    response_model=NotificationSendResponse,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(verify_api_key)],
+    tags=["Interno - Notificações"],
+    summary="Despachar notificação de oportunidade encontrada",
+    description=(
+        "Recebe dados do edital correspondente a um assinante, verifica deduplicação no banco de dados, "
+        "valida se o assinante está ativo e agenda o envio assíncrono do e-mail com resumo e link de descadastro."
+    ),
+    responses={
+        202: {"description": "Notificação processada (enfileirada, duplicada ou ignorada).", "model": NotificationSendResponse},
+        403: {"description": "API Key inválida.", "model": ErrorResponse},
+        422: {"description": "Dados da requisição inválidos."},
+        503: {"description": "Serviço ou banco de dados indisponível.", "model": ErrorResponse},
+    },
 )
 def send_notification(
     body: NotificationSendRequest,
@@ -267,8 +339,19 @@ def send_notification(
     return {"status": "queued", "message": "Notificação enfileirada para envio assíncrono."}
 
 
-
-@router.post("/api/internal/notifications/check-dedup", dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/api/internal/notifications/check-dedup",
+    response_model=DedupCheckResponse,
+    dependencies=[Depends(verify_api_key)],
+    tags=["Interno - Notificações"],
+    summary="Verificar deduplicação de notificação",
+    description="Verifica se uma notificação para a URL de um edital já foi registrada para um assinante específico.",
+    responses={
+        200: {"description": "Resultado da checagem retornado com sucesso.", "model": DedupCheckResponse},
+        403: {"description": "API Key inválida.", "model": ErrorResponse},
+        503: {"description": "Serviço ou banco de dados indisponível.", "model": ErrorResponse},
+    },
+)
 def check_dedup(body: DedupCheckRequest, conn=Depends(get_db)):
     """
     Verifica se uma notificação já foi enviada para o par (edital_url, subscriber_email).
@@ -286,8 +369,17 @@ def check_dedup(body: DedupCheckRequest, conn=Depends(get_db)):
 
 @router.post(
     "/api/internal/notifications/log",
+    response_model=NotificationLogResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(verify_api_key)],
+    tags=["Interno - Notificações"],
+    summary="Registrar log de notificação enviada",
+    description="Registra manualmente no banco de dados que uma notificação foi enviada para o par (edital_url, subscriber_email).",
+    responses={
+        201: {"description": "Notificação registrada com sucesso.", "model": NotificationLogResponse},
+        403: {"description": "API Key inválida.", "model": ErrorResponse},
+        503: {"description": "Serviço ou banco de dados indisponível.", "model": ErrorResponse},
+    },
 )
 def log_notification(body: NotificationLogRequest, conn=Depends(get_db)):
     """Registra que uma notificação foi enviada com sucesso."""
@@ -304,11 +396,20 @@ def log_notification(body: NotificationLogRequest, conn=Depends(get_db)):
     return {"message": "Notificação registrada com sucesso."}
 
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Health check
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/api/health")
+@router.get(
+    "/api/health",
+    response_model=HealthResponse,
+    tags=["Sistema"],
+    summary="Health check da API",
+    description="Retorna o status operacional da API e timestamp atual em UTC.",
+    responses={
+        200: {"description": "API em funcionamento normal.", "model": HealthResponse},
+    },
+)
 def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
