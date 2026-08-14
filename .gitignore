@@ -7,3 +7,4 @@ dbs
 *.log
 .env
 !.env.example
+!vercel.json
