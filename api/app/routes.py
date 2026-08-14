@@ -9,10 +9,15 @@ import smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 
-from .models import get_db
-from .schemas import DedupCheckRequest, NotificationLogRequest, SubscribeRequest
+from .models import get_db, get_unsubscribe_token_by_email
+from .schemas import (
+    DedupCheckRequest,
+    NotificationLogRequest,
+    NotificationSendRequest,
+    SubscribeRequest,
+)
 from .settings import API_SECRET_KEY, APP_BASE_URL, SMTP_FROM, SMTP_HOST, SMTP_PASS, SMTP_PORT, SMTP_USER
 
 router = APIRouter()
@@ -44,15 +49,24 @@ def _generate_unsubscribe_token(email: str) -> str:
     return hashlib.sha256(f"{email}{rand}".encode()).hexdigest()
 
 
-def _send_confirmation_email(email: str, keywords: str, token: str) -> None:
-    """Envia e-mail de confirmação de inscrição. Falha silenciosamente."""
+def _send_confirmation_email(email: str, keywords: str) -> None:
+    """
+    Envia e-mail de confirmação de inscrição.
+    Busca o token de desinscrição no banco de dados a partir do e-mail.
+    """
     if not SMTP_USER or not SMTP_PASS:
         return
-    unsubscribe_url = f"{APP_BASE_URL}/api/unsubscribe?token={token}"
+
+    unsub_token = get_unsubscribe_token_by_email(email)
+    if not unsub_token:
+        return
+
+    unsubscribe_url = f"{APP_BASE_URL}/api/unsubscribe?token={unsub_token}"
     body = (
         f"Olá!\n\n"
         f"Sua inscrição para receber alertas de editais foi confirmada.\n\n"
         f"Palavras-chave monitoradas: {keywords}\n\n"
+        f"────────────────────────────────────────────\n"
         f"Para cancelar sua inscrição, acesse:\n{unsubscribe_url}\n\n"
         f"Equipe GovOportunidades"
     )
@@ -70,12 +84,69 @@ def _send_confirmation_email(email: str, keywords: str, token: str) -> None:
         pass
 
 
+def _send_opportunity_email(
+    email: str,
+    edital_url: str,
+    matched_keywords: list[str],
+    summary: str,
+    text: str,
+) -> None:
+    """
+    Envia e-mail de notificação de oportunidade com link de unsubscribe individual.
+    Busca o token de desinscrição no banco de dados a partir do e-mail.
+    """
+    if not SMTP_USER or not SMTP_PASS:
+        return
+
+    token = get_unsubscribe_token_by_email(email)
+    if not token:
+        return
+
+    keywords_str = ", ".join(matched_keywords) if matched_keywords else "geral"
+    unsubscribe_url = f"{APP_BASE_URL}/api/unsubscribe?token={token}"
+
+    if summary:
+        details = summary
+    elif text:
+        details = f"Texto inicial:\n{text[:500]}"
+    else:
+        details = "Detalhes disponíveis no link do edital."
+
+    body = (
+        f"Olá!\n\n"
+        f"Encontramos uma nova oportunidade que corresponde às suas palavras-chave: {keywords_str}\n\n"
+        f"{details}\n\n"
+        f"Link da oportunidade:\n{edital_url}\n\n"
+        f"────────────────────────────────────────────\n"
+        f"Para cancelar o recebimento destes alertas, acesse:\n{unsubscribe_url}\n\n"
+        f"Equipe GovOportunidades"
+    )
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = f"Nova oportunidade encontrada: {keywords_str}"
+    msg["From"] = SMTP_FROM
+    msg["To"] = email
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_FROM, [email], msg.as_string())
+    except Exception:
+        pass
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints Públicos
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/api/subscribe", status_code=status.HTTP_201_CREATED)
-def subscribe(body: SubscribeRequest, conn=Depends(get_db)):
+def subscribe(
+    body: SubscribeRequest,
+    background_tasks: BackgroundTasks,
+    conn=Depends(get_db),
+):
     """Cadastra um novo assinante ou atualiza as palavras-chave de um existente."""
     token = _generate_unsubscribe_token(body.email)
     with conn.cursor() as cur:
@@ -87,15 +158,12 @@ def subscribe(body: SubscribeRequest, conn=Depends(get_db)):
                 SET keywords          = EXCLUDED.keywords,
                     active            = TRUE,
                     unsubscribe_token = EXCLUDED.unsubscribe_token
-            RETURNING unsubscribe_token
             """,
             (body.email, body.keywords.strip(), token),
         )
-        result = cur.fetchone()
         conn.commit()
-        final_token = result[0] if result else token
 
-    _send_confirmation_email(body.email, body.keywords, final_token)
+    background_tasks.add_task(_send_confirmation_email, body.email, body.keywords)
     return {"message": "Inscrição realizada com sucesso!", "email": body.email}
 
 
@@ -144,6 +212,62 @@ def list_subscribers(conn=Depends(get_db)):
     return {"subscribers": subscribers, "total": len(subscribers)}
 
 
+@router.post(
+    "/api/internal/notifications/send",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(verify_api_key)],
+)
+def send_notification(
+    body: NotificationSendRequest,
+    background_tasks: BackgroundTasks,
+    conn=Depends(get_db),
+):
+    """
+    Recebe solicitação de notificação do crawler, verifica dedup
+    e agenda o envio assíncrono do e-mail.
+    """
+    with conn.cursor() as cur:
+        # 1. Verifica se já foi notificado
+        cur.execute(
+            "SELECT 1 FROM notification_log WHERE edital_url = %s AND subscriber_email = %s LIMIT 1",
+            (body.edital_url, body.subscriber_email),
+        )
+        if cur.fetchone() is not None:
+            return {"status": "already_sent", "message": "Notificação já enviada anteriormente."}
+
+        # 2. Valida se assinante está ativo
+        cur.execute(
+            "SELECT 1 FROM subscribers WHERE email = %s AND active = TRUE LIMIT 1",
+            (body.subscriber_email,),
+        )
+        if not cur.fetchone():
+            return {"status": "ignored", "message": "Assinante inativo ou inexistente."}
+
+        # 3. Registra no log de notificações
+        cur.execute(
+            """
+            INSERT INTO notification_log (edital_url, subscriber_email)
+            VALUES (%s, %s)
+            ON CONFLICT (edital_url, subscriber_email) DO NOTHING
+            """,
+            (body.edital_url, body.subscriber_email),
+        )
+        conn.commit()
+
+    # 4. Agenda envio do e-mail em background (busca o token pelo email internamente)
+    background_tasks.add_task(
+        _send_opportunity_email,
+        body.subscriber_email,
+        body.edital_url,
+        body.matched_keywords,
+        body.summary,
+        body.text,
+    )
+
+    return {"status": "queued", "message": "Notificação enfileirada para envio assíncrono."}
+
+
+
 @router.post("/api/internal/notifications/check-dedup", dependencies=[Depends(verify_api_key)])
 def check_dedup(body: DedupCheckRequest, conn=Depends(get_db)):
     """
@@ -178,6 +302,7 @@ def log_notification(body: NotificationLogRequest, conn=Depends(get_db)):
         )
         conn.commit()
     return {"message": "Notificação registrada com sucesso."}
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

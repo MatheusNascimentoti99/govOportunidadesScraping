@@ -61,3 +61,24 @@ def _ensure_schema(conn) -> None:
             """
         )
         conn.commit()
+
+
+def get_unsubscribe_token_by_email(email: str) -> str | None:
+    """Busca o token de desinscrição do assinante ativo no banco de dados a partir do e-mail."""
+    if not DATABASE_URL:
+        return None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT unsubscribe_token FROM subscribers WHERE email = %s AND active = TRUE LIMIT 1",
+                    (email,),
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+

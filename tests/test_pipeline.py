@@ -33,11 +33,6 @@ def pipeline():
     return SubscriberNotificationPipeline(
         api_base_url="https://fake-api.vercel.app",
         api_secret_key="test-secret",
-        mail_host="smtp.test.com",
-        mail_port=587,
-        mail_user="bot@test.com",
-        mail_pass="secret",
-        mail_from="bot@test.com",
     )
 
 
@@ -91,7 +86,6 @@ def test_open_spider_skips_when_no_config(mock_spider):
     p = SubscriberNotificationPipeline(
         api_base_url="",
         api_secret_key="",
-        mail_host="", mail_port=587, mail_user="", mail_pass="", mail_from="",
     )
     with patch("requests.get") as mock_get:
         p.open_spider(mock_spider)
@@ -119,66 +113,57 @@ def test_process_item_no_keywords(pipeline, mock_spider):
 # process_item – item com keywords que batem
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_process_item_sends_email_when_keywords_match(pipeline, mock_spider):
-    """Deve enviar e-mail e logar notificação quando há match de keywords."""
+def test_process_item_dispatches_notification_when_keywords_match(pipeline, mock_spider):
+    """Deve chamar endpoint de notificação na API quando há match de keywords."""
     pipeline.subscribers = FAKE_SUBSCRIBERS
     item = EditalItem(
         url="https://example.com/edital/42",
         text="Edital de engenharia civil do governo",
+        summary="Resumo de teste",
         matched_keywords=["engenharia", "civil"],
     )
 
-    # check-dedup retorna False (ainda não enviado)
-    dedup_response = MagicMock()
-    dedup_response.json.return_value = {"already_sent": False}
-    dedup_response.raise_for_status = MagicMock()
+    send_response = MagicMock()
+    send_response.json.return_value = {"status": "queued", "message": "Enfileirado"}
+    send_response.raise_for_status = MagicMock()
 
-    # log retorna 201
-    log_response = MagicMock()
-    log_response.raise_for_status = MagicMock()
-
-    with patch("requests.post", return_value=dedup_response) as mock_post, \
-         patch.object(pipeline, "_send_email", return_value=True) as mock_send:
-        # Segunda chamada ao mock_post será o log; precisamos distingui-las
-        mock_post.side_effect = [dedup_response, log_response]
+    with patch("requests.post", return_value=send_response) as mock_post:
         pipeline.process_item(item, mock_spider)
 
-    # Verificar que check-dedup foi chamado para alice (que tem keywords engenharia/civil)
-    first_call_args = mock_post.call_args_list[0]
-    assert "check-dedup" in first_call_args[0][0]
+    mock_post.assert_called_once()
+    called_url, called_kwargs = mock_post.call_args[0][0], mock_post.call_args[1]
+    assert called_url == "https://fake-api.vercel.app/api/internal/notifications/send"
+    assert called_kwargs["headers"]["X-API-Key"] == "test-secret"
 
-    # Verificar que _send_email foi chamado para alice
-    mock_send.assert_called_once()
-    call_kwargs = mock_send.call_args
-    assert call_kwargs[0][0] == "alice@example.com"
-
-    # Verificar que log foi chamado
-    second_call_args = mock_post.call_args_list[1]
-    assert "/log" in second_call_args[0][0]
+    payload = json.loads(called_kwargs["data"])
+    assert payload["edital_url"] == "https://example.com/edital/42"
+    assert payload["subscriber_email"] == "alice@example.com"
+    assert payload["matched_keywords"] == ["engenharia", "civil"]
+    assert payload["summary"] == "Resumo de teste"
 
 
-def test_process_item_skips_when_already_sent(pipeline, mock_spider):
-    """Não deve enviar e-mail quando check-dedup retorna already_sent=True."""
-    pipeline.subscribers = [FAKE_SUBSCRIBERS[0]]  # apenas alice
+def test_process_item_handles_already_sent_response(pipeline, mock_spider):
+    """Quando a API retorna status already_sent, pipeline registra em debug sem erro."""
+    pipeline.subscribers = [FAKE_SUBSCRIBERS[0]]  # alice
     item = EditalItem(
         url="https://example.com/edital/42",
         text="Edital de engenharia civil",
         matched_keywords=["engenharia"],
     )
 
-    dedup_response = MagicMock()
-    dedup_response.json.return_value = {"already_sent": True}
-    dedup_response.raise_for_status = MagicMock()
+    send_response = MagicMock()
+    send_response.json.return_value = {"status": "already_sent", "message": "Já enviado"}
+    send_response.raise_for_status = MagicMock()
 
-    with patch("requests.post", return_value=dedup_response), \
-         patch.object(pipeline, "_send_email") as mock_send:
+    with patch("requests.post", return_value=send_response) as mock_post:
         pipeline.process_item(item, mock_spider)
 
-    mock_send.assert_not_called()
+    mock_post.assert_called_once()
+    mock_spider.logger.debug.assert_called_once()
 
 
 def test_process_item_no_keyword_match_for_subscriber(pipeline, mock_spider):
-    """Assinante cujas keywords não batem com o edital não deve ser notificado."""
+    """Assinante cujas keywords não batem com o edital não deve receber disparo."""
     pipeline.subscribers = [FAKE_SUBSCRIBERS[1]]  # bob (TI, software)
     item = EditalItem(
         url="https://example.com/edital/99",
@@ -186,25 +171,22 @@ def test_process_item_no_keyword_match_for_subscriber(pipeline, mock_spider):
         matched_keywords=["engenharia", "civil"],
     )
 
-    with patch("requests.post") as mock_post, \
-         patch.object(pipeline, "_send_email") as mock_send:
+    with patch("requests.post") as mock_post:
         pipeline.process_item(item, mock_spider)
 
-    mock_post.assert_not_called()  # Nem chegou a verificar dedup
-    mock_send.assert_not_called()
+    mock_post.assert_not_called()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# _send_email – falha SMTP não deve propagar exceção
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_send_email_smtp_failure_returns_false(pipeline, mock_spider):
-    """Falha de SMTP deve retornar False sem levantar exceção."""
-    import smtplib
-    with patch("smtplib.SMTP", side_effect=smtplib.SMTPException("connection failed")):
-        result = pipeline._send_email(
-            "user@example.com", "https://example.com/edital/1",
-            "texto", "resumo", ["engenharia"], mock_spider,
+def test_dispatch_notification_api_failure_does_not_crash(pipeline, mock_spider):
+    """Falha de rede ao chamar a API deve ser capturada no log sem propagar exceção."""
+    with patch("requests.post", side_effect=Exception("Timeout da API")):
+        result = pipeline._dispatch_notification(
+            "https://example.com/edital/1",
+            "user@example.com",
+            ["engenharia"],
+            "resumo",
+            "texto",
+            mock_spider,
         )
     assert result is False
     mock_spider.logger.error.assert_called_once()
@@ -219,18 +201,16 @@ def test_process_item_matches_keywords_from_text_automatically(pipeline, mock_sp
         text="Vaga aberta para especialista em software e desenvolvimento.",
     )
 
-    dedup_response = MagicMock()
-    dedup_response.json.return_value = {"already_sent": False}
-    dedup_response.raise_for_status = MagicMock()
+    send_response = MagicMock()
+    send_response.json.return_value = {"status": "queued"}
+    send_response.raise_for_status = MagicMock()
 
-    log_response = MagicMock()
-    log_response.raise_for_status = MagicMock()
-
-    with patch("requests.post", side_effect=[dedup_response, log_response]), \
-         patch.object(pipeline, "_send_email", return_value=True) as mock_send:
+    with patch("requests.post", return_value=send_response) as mock_post:
         result = pipeline.process_item(item, mock_spider)
 
     assert "software" in result.get("matched_keywords", [])
-    mock_send.assert_called_once()
-    assert mock_send.call_args[0][0] == "bob@example.com"
+    mock_post.assert_called_once()
+    payload = json.loads(mock_post.call_args[1]["data"])
+    assert payload["subscriber_email"] == "bob@example.com"
+
 

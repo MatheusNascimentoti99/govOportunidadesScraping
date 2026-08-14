@@ -335,38 +335,30 @@ class SubscriberNotificationPipeline:
     """
     Pipeline de notificação baseado em assinantes cadastrados via API.
 
+    O scraper não envia e-mails diretamente via SMTP; ele apenas identifica
+    as oportunidades que casam com as palavras-chave dos assinantes e despacha
+    a notificação para o endpoint interno da API FastAPI, que realiza a
+    deduplicação e o envio assíncrono (BackgroundTasks) incluindo o link individual
+    de desinscrição (unsubscribe).
+
     Fluxo:
       1. ``open_spider``: busca a lista de assinantes ativos em
          ``GET /api/internal/subscribers`` (autenticado por X-API-Key).
-      2. ``process_item``: para cada item com ``matched_keywords``, itera
-         sobre os assinantes cujas palavras-chave batem com as do edital,
-         verifica dedup via ``POST /api/internal/notifications/check-dedup``,
-         dispara o e-mail e registra o envio via
-         ``POST /api/internal/notifications/log``.
+      2. ``process_item``: para cada item com ``matched_keywords``, identifica
+         os assinantes interessados e chama ``POST /api/internal/notifications/send``.
 
     Variáveis de ambiente necessárias:
-      - API_BASE_URL   – URL base da API FastAPI (ex: https://seu-app.vercel.app)
+      - API_BASE_URL   – URL base da API FastAPI (ex: http://localhost:8000 ou https://seu-app.vercel.app)
       - API_SECRET_KEY – Chave secreta para autenticação nas rotas internas
-      - SCRAPY_MAIL_*  – Configurações SMTP para envio de e-mail
     """
 
     def __init__(
         self,
         api_base_url: str,
         api_secret_key: str,
-        mail_host: str,
-        mail_port: int,
-        mail_user: str,
-        mail_pass: str,
-        mail_from: str,
     ):
         self.api_base_url = api_base_url.rstrip("/")
         self.api_secret_key = api_secret_key
-        self.mail_host = mail_host
-        self.mail_port = mail_port
-        self.mail_user = mail_user
-        self.mail_pass = mail_pass
-        self.mail_from = mail_from
         self.subscribers: list[dict] = []
 
     @classmethod
@@ -375,11 +367,6 @@ class SubscriberNotificationPipeline:
         return cls(
             api_base_url=os.getenv("API_BASE_URL", crawler.settings.get("API_BASE_URL", "")),
             api_secret_key=os.getenv("API_SECRET_KEY", crawler.settings.get("API_SECRET_KEY", "")),
-            mail_host=crawler.settings.get("MAIL_HOST", ""),
-            mail_port=int(crawler.settings.get("MAIL_PORT", 587)),
-            mail_user=crawler.settings.get("MAIL_USER", ""),
-            mail_pass=crawler.settings.get("MAIL_PASS", ""),
-            mail_from=crawler.settings.get("MAIL_FROM", ""),
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -456,18 +443,8 @@ class SubscriberNotificationPipeline:
             if not matching:
                 continue
 
-            # Dedup: verifica se já notificamos este assinante para este edital
-            if self._is_already_sent(url, email, spider):
-                spider.logger.debug(
-                    f"SubscriberNotificationPipeline: [{email}] já notificado para {url}. Pulando."
-                )
-                continue
-
-            # Envia e-mail
-            sent = self._send_email(email, url, text, summary, matching, spider)
-            if sent:
-                # Registra o envio na API
-                self._log_notification(url, email, spider)
+            # Despacha notificação para a API (envio assíncrono com dedup e token de unsubscribe)
+            self._dispatch_notification(url, email, matching, summary, text, spider)
 
         return item
 
@@ -475,91 +452,46 @@ class SubscriberNotificationPipeline:
     # Helpers
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _is_already_sent(self, edital_url: str, subscriber_email: str, spider) -> bool:
-        """Consulta a API para verificar se o par (url, email) já foi notificado."""
-        endpoint = f"{self.api_base_url}/api/internal/notifications/check-dedup"
-        try:
-            resp = requests.post(
-                endpoint,
-                headers={"X-API-Key": self.api_secret_key, "Content-Type": "application/json"},
-                data=json.dumps({"edital_url": edital_url, "subscriber_email": subscriber_email}),
-                timeout=15,
-            )
-            resp.raise_for_status()
-            return resp.json().get("already_sent", False)
-        except Exception as e:
-            spider.logger.error(
-                f"SubscriberNotificationPipeline: falha na verificação de dedup: {e}"
-            )
-            # Em caso de erro, assume que não foi enviado (evita perda de notificação)
-            return False
-
-    def _log_notification(self, edital_url: str, subscriber_email: str, spider) -> None:
-        """Registra o envio de notificação na API."""
-        endpoint = f"{self.api_base_url}/api/internal/notifications/log"
-        try:
-            resp = requests.post(
-                endpoint,
-                headers={"X-API-Key": self.api_secret_key, "Content-Type": "application/json"},
-                data=json.dumps({"edital_url": edital_url, "subscriber_email": subscriber_email}),
-                timeout=15,
-            )
-            resp.raise_for_status()
-        except Exception as e:
-            spider.logger.error(
-                f"SubscriberNotificationPipeline: falha ao registrar notificação: {e}"
-            )
-
-    def _send_email(
+    def _dispatch_notification(
         self,
-        to_email: str,
-        url: str,
-        text: str,
+        edital_url: str,
+        subscriber_email: str,
+        matched_keywords: list[str],
         summary: str,
-        matched: list[str],
+        text: str,
         spider,
     ) -> bool:
-        """Envia e-mail de notificação via SMTP. Retorna True se bem-sucedido."""
-        import smtplib
-        from email.mime.text import MIMEText
-
-        subject = "Nova oportunidade encontrada: " + ", ".join(matched)
-        if summary:
-            body = (
-                f"Olá!\n\n"
-                f"Encontramos uma nova oportunidade que corresponde às suas palavras-chave: "
-                f"{', '.join(matched)}\n\n"
-                f"{summary}\n\n"
-                f"Link: {url}\n\n"
-                f"Equipe GovOportunidades"
-            )
-        else:
-            body = (
-                f"Olá!\n\n"
-                f"Encontramos uma nova oportunidade que corresponde às suas palavras-chave: "
-                f"{', '.join(matched)}\n\n"
-                f"Link: {url}\n\n"
-                f"Texto inicial:\n{text[:500]}\n\n"
-                f"Equipe GovOportunidades"
-            )
-
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["Subject"] = subject
-        msg["From"] = self.mail_from or self.mail_user
-        msg["To"] = to_email
-
+        """Despacha a notificação para a API FastAPI."""
+        endpoint = f"{self.api_base_url}/api/internal/notifications/send"
+        payload = {
+            "edital_url": edital_url,
+            "subscriber_email": subscriber_email,
+            "matched_keywords": matched_keywords,
+            "summary": summary,
+            "text": text[:500] if text else "",
+        }
         try:
-            with smtplib.SMTP(self.mail_host, self.mail_port, timeout=30) as server:
-                server.ehlo()
-                server.starttls()
-                server.login(self.mail_user, self.mail_pass)
-                server.sendmail(self.mail_from or self.mail_user, [to_email], msg.as_string())
-            spider.logger.info(
-                f"SubscriberNotificationPipeline: e-mail enviado para {to_email} ({url})"
+            resp = requests.post(
+                endpoint,
+                headers={"X-API-Key": self.api_secret_key, "Content-Type": "application/json"},
+                data=json.dumps(payload),
+                timeout=15,
             )
+            resp.raise_for_status()
+            data = resp.json()
+            status_val = data.get("status")
+            if status_val == "already_sent":
+                spider.logger.debug(
+                    f"SubscriberNotificationPipeline: [{subscriber_email}] já notificado para {edital_url}. Pulando."
+                )
+            elif status_val == "queued":
+                spider.logger.info(
+                    f"SubscriberNotificationPipeline: notificação enfileirada na API para [{subscriber_email}] ({edital_url})."
+                )
             return True
         except Exception as e:
             spider.logger.error(
-                f"SubscriberNotificationPipeline: falha ao enviar e-mail para {to_email}: {e}"
+                f"SubscriberNotificationPipeline: falha ao despachar notificação para [{subscriber_email}]: {e}"
             )
             return False
+

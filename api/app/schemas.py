@@ -25,3 +25,11 @@ class DedupCheckRequest(BaseModel):
 class NotificationLogRequest(BaseModel):
     edital_url: str
     subscriber_email: str
+
+
+class NotificationSendRequest(BaseModel):
+    edital_url: str
+    subscriber_email: EmailStr
+    matched_keywords: list[str] = []
+    summary: str = ""
+    text: str = ""

@@ -4,7 +4,7 @@ Testes da API FastAPI – tests/test_api.py
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -182,3 +182,161 @@ def test_log_notification():
     app.dependency_overrides.clear()
     assert resp.status_code == 201
     assert "registrada" in resp.json()["message"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/internal/notifications/send (Async Background Dispatch)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_send_notification_queued():
+    """Notificação válida deve ser enfileirada e agendar envio assíncrono."""
+    # 1ª consulta (dedup): None; 2ª consulta (active subscriber): (1,)
+    mock_cursor = MagicMock()
+    mock_cursor.__enter__ = lambda s: s
+    mock_cursor.__exit__ = MagicMock(return_value=False)
+    mock_cursor.fetchone.side_effect = [None, (1,)]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    from api.app.app import app
+    from api.app.models import get_db
+
+    def override():
+        yield mock_conn
+
+    app.dependency_overrides[get_db] = override
+    with patch("api.app.routes._send_opportunity_email") as mock_email:
+        client = TestClient(app)
+        resp = client.post(
+            "/api/internal/notifications/send",
+            headers={"X-API-Key": "test-secret-key"},
+            json={
+                "edital_url": "https://example.com/edital/99",
+                "subscriber_email": "user@example.com",
+                "matched_keywords": ["engenharia", "civil"],
+                "summary": "Resumo do edital",
+                "text": "Texto completo...",
+            },
+        )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "queued"
+    mock_email.assert_called_once_with(
+        "user@example.com",
+        "https://example.com/edital/99",
+        ["engenharia", "civil"],
+        "Resumo do edital",
+        "Texto completo...",
+    )
+
+
+def test_send_notification_already_sent():
+    """Se já foi enviada notificação para a mesma URL/email, retorna already_sent sem agendar envio."""
+    mock_cursor = MagicMock()
+    mock_cursor.__enter__ = lambda s: s
+    mock_cursor.__exit__ = MagicMock(return_value=False)
+    mock_cursor.fetchone.return_value = (1,)  # já existe no log
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    from api.app.app import app
+    from api.app.models import get_db
+
+    def override():
+        yield mock_conn
+
+    app.dependency_overrides[get_db] = override
+    with patch("api.app.routes._send_opportunity_email") as mock_email:
+        client = TestClient(app)
+        resp = client.post(
+            "/api/internal/notifications/send",
+            headers={"X-API-Key": "test-secret-key"},
+            json={
+                "edital_url": "https://example.com/edital/99",
+                "subscriber_email": "user@example.com",
+            },
+        )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "already_sent"
+    mock_email.assert_not_called()
+
+
+def test_send_notification_inactive_or_unknown_subscriber():
+    """Se o assinante não for encontrado ou estiver inativo, não agenda envio."""
+    mock_cursor = MagicMock()
+    mock_cursor.__enter__ = lambda s: s
+    mock_cursor.__exit__ = MagicMock(return_value=False)
+    # 1ª consulta (dedup): None; 2ª consulta (active subscriber): None (não encontrado)
+    mock_cursor.fetchone.side_effect = [None, None]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    from api.app.app import app
+    from api.app.models import get_db
+
+    def override():
+        yield mock_conn
+
+    app.dependency_overrides[get_db] = override
+    with patch("api.app.routes._send_opportunity_email") as mock_email:
+        client = TestClient(app)
+        resp = client.post(
+            "/api/internal/notifications/send",
+            headers={"X-API-Key": "test-secret-key"},
+            json={
+                "edital_url": "https://example.com/edital/99",
+                "subscriber_email": "unknown@example.com",
+            },
+        )
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "ignored"
+    mock_email.assert_not_called()
+
+
+def test_opportunity_email_body_contains_unsubscribe_link(monkeypatch):
+    """Verifica que o e-mail montado por _send_opportunity_email contém o link de unsubscribe correto buscando o token no banco."""
+    from api.app.routes import _send_opportunity_email
+
+    monkeypatch.setenv("SCRAPY_MAIL_USER", "sender@test.com")
+    monkeypatch.setenv("SCRAPY_MAIL_PASS", "pass123")
+    monkeypatch.setenv("API_BASE_URL", "https://meu-app.vercel.app")
+
+    sent_messages = []
+
+    mock_server = MagicMock()
+    mock_server.__enter__ = lambda s: s
+    mock_server.__exit__ = MagicMock(return_value=False)
+
+    def fake_sendmail(sender, recipients, msg_str):
+        sent_messages.append((sender, recipients, msg_str))
+
+    mock_server.sendmail = fake_sendmail
+
+    with patch("smtplib.SMTP", return_value=mock_server), \
+         patch("api.app.routes.get_unsubscribe_token_by_email", return_value="tok_secret_999") as mock_lookup, \
+         patch("api.app.routes.SMTP_USER", "sender@test.com"), \
+         patch("api.app.routes.SMTP_PASS", "pass123"), \
+         patch("api.app.routes.APP_BASE_URL", "https://meu-app.vercel.app"):
+        _send_opportunity_email(
+            email="subscriber@example.com",
+            edital_url="https://example.com/edital/500",
+            matched_keywords=["dados", "ia"],
+            summary="Oportunidade para Cientista de Dados.",
+            text="Texto de teste...",
+        )
+
+    mock_lookup.assert_called_once_with("subscriber@example.com")
+    assert len(sent_messages) == 1
+    _, recipients, msg_body = sent_messages[0]
+    assert "subscriber@example.com" in recipients
+    assert "https://meu-app.vercel.app/api/unsubscribe?token=tok_secret_999" in msg_body
+    assert "Oportunidade para Cientista de Dados." in msg_body
+    assert "https://example.com/edital/500" in msg_body
+
+
+
