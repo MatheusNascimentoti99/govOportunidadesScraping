@@ -22,19 +22,38 @@ Coletor (Scrapy) para identificar oportunidades governamentais (editais) no port
 ## Estrutura do projeto
 ```
 . 
+├─ api/                      # API RESTful FastAPI (Vercel Serverless / Docker)
+│  ├─ app/
+│  │  ├─ app.py              # Instância FastAPI com tags e OpenAPI
+│  │  ├─ routes.py           # Endpoints públicos e internos
+│  │  ├─ schemas.py          # Schemas Pydantic com descrições e validação
+│  │  ├─ models.py           # Camada PostgreSQL e gerenciamento de banco
+│  │  └─ settings.py         # Configurações via variáveis de ambiente
+│  └─ index.py               # Ponto de entrada Vercel ASGI
+├─ docs/
+│  └─ API.md                 # Guia completo da API RESTful para terceiros
 ├─ govoportunidades/
 │  ├─ spiders/
 │  │  └─ edital.py          # Spider principal
 │  ├─ items.py               # Itens: EditalExtractor (url, text)
-│  ├─ pipelines.py           # Pipelines: dedupe, SQLite, notificação
+│  ├─ pipelines.py           # Pipelines: dedupe, API subscriber dispatch
 │  └─ settings.py            # Settings (dotenv, e-mail, keywords, pipelines)
 ├─ requirements.txt          # Dependências
-├─ dockerfile                # Build e execução do spider no container
+├─ vercel.json               # Configuração serverless Vercel
+├─ Dockerfile                # Build e execução da API e do spider no container
+├─ docker-compose.yml        # PostgreSQL + API FastAPI local
 ├─ scripts/
 │  └─ run_crawl.sh           # Script para cron (lock, logs, export)
 ├─ CRON.md                   # Guia de agendamento no cron
 └─ README.md                 # Este arquivo
 ```
+
+## 📖 Documentação da API
+A API RESTful FastAPI possui documentação interativa integrada e guia detalhado:
+- 📘 **Guia Completo de Integração**: Consulte [docs/API.md](docs/API.md) para detalhes de schemas, autenticação (`X-API-Key`) e exemplos cURL.
+- 🚀 **Swagger UI (Interativo)**: `http://localhost:8000/docs` (ou na Vercel `/docs`)
+- 📑 **ReDoc**: `http://localhost:8000/redoc` (ou na Vercel `/redoc`)
+
 
 ## Requisitos
 - Python 3.10+
