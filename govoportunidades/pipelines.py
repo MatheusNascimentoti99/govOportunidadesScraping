@@ -467,8 +467,8 @@ class SubscriberNotificationPipeline:
             "edital_url": edital_url,
             "subscriber_email": subscriber_email,
             "matched_keywords": matched_keywords,
-            "summary": summary,
-            "text": text[:500] if text else "",
+            "summary": summary or "",
+            "text": text[:4000] if text else "",
         }
         try:
             resp = requests.post(

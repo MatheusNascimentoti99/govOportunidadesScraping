@@ -332,11 +332,89 @@ def test_opportunity_email_body_contains_unsubscribe_link(monkeypatch):
 
     mock_lookup.assert_called_once_with("subscriber@example.com")
     assert len(sent_messages) == 1
-    _, recipients, msg_body = sent_messages[0]
+    _, recipients, msg_raw = sent_messages[0]
+    import email
+    msg_obj = email.message_from_string(msg_raw)
+    payload_bytes = msg_obj.get_payload(decode=True)
+    msg_decoded = payload_bytes.decode("utf-8") if payload_bytes else msg_raw
+
     assert "subscriber@example.com" in recipients
-    assert "https://meu-app.vercel.app/api/unsubscribe?token=tok_secret_999" in msg_body
-    assert "Oportunidade para Cientista de Dados." in msg_body
-    assert "https://example.com/edital/500" in msg_body
+    assert "https://meu-app.vercel.app/api/unsubscribe?token=tok_secret_999" in msg_decoded
+    assert "Oportunidade para Cientista de Dados." in msg_decoded
+    assert "https://example.com/edital/500" in msg_decoded
+
+
+def test_api_summarize_with_openrouter_success():
+    """Verifica que _summarize_with_openrouter chama a API e retorna o conteúdo gerado."""
+    from api.app.routes import _summarize_with_openrouter
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": "Resumo gerado pelo OpenRouter na API."}}]
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("api.app.routes.OPENROUTER_API_KEY", "test-sk-123"), \
+         patch("requests.post", return_value=mock_resp) as mock_post:
+        summary = _summarize_with_openrouter("Texto completo do edital governamental.")
+
+    assert summary == "Resumo gerado pelo OpenRouter na API."
+    mock_post.assert_called_once()
+
+
+def test_api_summarize_with_openrouter_missing_key():
+    """Se OPENROUTER_API_KEY estiver vazia, retorna string vazia sem fazer requisição HTTP."""
+    from api.app.routes import _summarize_with_openrouter
+
+    with patch("api.app.routes.OPENROUTER_API_KEY", ""), \
+         patch("requests.post") as mock_post:
+        summary = _summarize_with_openrouter("Texto do edital.")
+
+    assert summary == ""
+    mock_post.assert_not_called()
+
+
+def test_opportunity_email_invokes_openrouter_when_summary_empty(monkeypatch):
+    """Quando summary vem vazio mas text existe, _send_opportunity_email chama _summarize_with_openrouter."""
+    from api.app.routes import _send_opportunity_email
+
+    monkeypatch.setenv("SCRAPY_MAIL_USER", "sender@test.com")
+    monkeypatch.setenv("SCRAPY_MAIL_PASS", "pass123")
+    monkeypatch.setenv("API_BASE_URL", "https://meu-app.vercel.app")
+
+    sent_messages = []
+    mock_server = MagicMock()
+    mock_server.__enter__ = lambda s: s
+    mock_server.__exit__ = MagicMock(return_value=False)
+
+    def fake_sendmail(sender, recipients, msg_str):
+        sent_messages.append((sender, recipients, msg_str))
+
+    mock_server.sendmail = fake_sendmail
+
+    with patch("smtplib.SMTP", return_value=mock_server), \
+         patch("api.app.routes.get_unsubscribe_token_by_email", return_value="tok_123"), \
+         patch("api.app.routes.SMTP_USER", "sender@test.com"), \
+         patch("api.app.routes.SMTP_PASS", "pass123"), \
+         patch("api.app.routes.APP_BASE_URL", "https://meu-app.vercel.app"), \
+         patch("api.app.routes._summarize_with_openrouter", return_value="Resumo automático via API") as mock_ai:
+        _send_opportunity_email(
+            email="user@test.com",
+            edital_url="https://example.com/edital/777",
+            matched_keywords=["ia"],
+            summary="",
+            text="Texto de edital extenso...",
+        )
+
+    mock_ai.assert_called_once_with("Texto de edital extenso...")
+    assert len(sent_messages) == 1
+    _, _, msg_raw = sent_messages[0]
+    import email
+    msg_obj = email.message_from_string(msg_raw)
+    payload_bytes = msg_obj.get_payload(decode=True)
+    msg_decoded = payload_bytes.decode("utf-8") if payload_bytes else msg_raw
+    assert "Resumo automático via API" in msg_decoded
+
 
 
 

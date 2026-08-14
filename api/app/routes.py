@@ -4,11 +4,13 @@ routes.py – Todos os endpoints FastAPI (públicos + internos) com documentaç�
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 import smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 
+import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 
 from .models import get_db, get_unsubscribe_token_by_email
@@ -26,7 +28,18 @@ from .schemas import (
     SubscribersListResponse,
     UnsubscribeResponse,
 )
-from .settings import API_SECRET_KEY, APP_BASE_URL, SMTP_FROM, SMTP_HOST, SMTP_PASS, SMTP_PORT, SMTP_USER
+from .settings import (
+    API_SECRET_KEY,
+    APP_BASE_URL,
+    OPENROUTER_API_KEY,
+    OPENROUTER_MAX_TEXT_LENGTH,
+    OPENROUTER_MODEL,
+    SMTP_FROM,
+    SMTP_HOST,
+    SMTP_PASS,
+    SMTP_PORT,
+    SMTP_USER,
+)
 
 router = APIRouter()
 
@@ -57,12 +70,58 @@ def verify_api_key(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helpers
+# Helpers & Resumo com IA
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _generate_unsubscribe_token(email: str) -> str:
     rand = secrets.token_hex(16)
     return hashlib.sha256(f"{email}{rand}".encode()).hexdigest()
+
+
+def _summarize_with_openrouter(text: str) -> str:
+    """Gera resumo executivo do texto do edital via OpenRouter."""
+    if not OPENROUTER_API_KEY or not text.strip():
+        return ""
+
+    truncated_text = text[:OPENROUTER_MAX_TEXT_LENGTH]
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/MatheusNascimentoti99/govOportunidadesScraping",
+        "X-Title": "GovOportunidades API",
+    }
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Você é um assistente especializado em resumo de textos de oportunidades e editais "
+                    "do governo brasileiro. Resuma o texto do edital de forma "
+                    "clara e objetiva em português, destacando: objeto da "
+                    "oportunidade, órgão responsável, local, prazos/datas principais "
+                    "e requisitos básicos. Máximo 300 palavras. "
+                    "O texto deve ser formatado de forma limpa para leitura em e-mail."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Resuma o seguinte edital:\n\n{truncated_text}",
+            },
+        ],
+    }
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            data=json.dumps(payload),
+            timeout=45,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception:
+        return ""
 
 
 def _send_confirmation_email(email: str, keywords: str) -> None:
@@ -109,7 +168,7 @@ def _send_opportunity_email(
 ) -> None:
     """
     Envia e-mail de notificação de oportunidade com link de unsubscribe individual.
-    Busca o token de desinscrição no banco de dados a partir do e-mail.
+    Gera resumo via OpenRouter na API caso não tenha sido fornecido previamente.
     """
     if not SMTP_USER or not SMTP_PASS:
         return
@@ -121,8 +180,13 @@ def _send_opportunity_email(
     keywords_str = ", ".join(matched_keywords) if matched_keywords else "geral"
     unsubscribe_url = f"{APP_BASE_URL}/api/unsubscribe?token={token}"
 
-    if summary:
-        details = summary
+    # Se não houver resumo prévio e houver texto, tenta resumir com OpenRouter
+    final_summary = summary
+    if not final_summary and text:
+        final_summary = _summarize_with_openrouter(text)
+
+    if final_summary:
+        details = final_summary
     elif text:
         details = f"Texto inicial:\n{text[:500]}"
     else:
@@ -151,6 +215,7 @@ def _send_opportunity_email(
             server.sendmail(SMTP_FROM, [email], msg.as_string())
     except Exception:
         pass
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

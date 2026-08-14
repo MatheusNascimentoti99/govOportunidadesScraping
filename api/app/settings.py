@@ -22,3 +22,9 @@ SMTP_FROM: str = os.getenv("SCRAPY_MAIL_FROM", os.getenv("SCRAPY_MAIL_USER", "")
 
 # ── App ────────────────────────────────────────────────────────────
 APP_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
+
+# ── OpenRouter (Resumo com LLM) ────────────────────────────────────
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free").strip()
+OPENROUTER_MAX_TEXT_LENGTH: int = int(os.getenv("OPENROUTER_MAX_TEXT_LENGTH", "4000"))
+

@@ -65,12 +65,11 @@ DOWNLOAD_DELAY = 2
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
-    # Pipeline de sumarização com IA (opcional, requer OPENROUTER_API_KEY)
-    "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
-    # Pipeline API-centric (busca assinantes ativos via API, verifica dedup e envia notificações)
+    # Pipeline API-centric (busca assinantes ativos via API e despacha oportunidades para resumo e envio assíncrono)
     "govoportunidades.pipelines.SubscriberNotificationPipeline": 350,
 
-    # Pipelines legados baseados em SQLite / notificação estática:
+    # Pipelines legados / alternativos:
+    # "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
     # "govoportunidades.pipelines.NotificationDedupPipeline": 150,
     # "govoportunidades.pipelines.SQLitePipeline": 200,
     # "govoportunidades.pipelines.NotificationPipeline": 300,
