@@ -31,34 +31,27 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     
-    - name: Restore SQLite database
-      uses: actions/cache@v5
-      with:
-        path: editais.db
-        key: editais-db-${{ github.run_id }}
-        restore-keys: |
-          editais-db-
-    
     - name: Run Scrapy spider
       env:
-        SCRAPY_KEY_WORDS: ${{ secrets.SCRAPY_KEY_WORDS }}
-        SCRAPY_MAIL_TO: ${{ secrets.SCRAPY_MAIL_TO }}
+        # ── SMTP ──────────────────────────────────────────────────────────────
         SCRAPY_MAIL_HOST: ${{ secrets.SCRAPY_MAIL_HOST }}
         SCRAPY_MAIL_PORT: ${{ secrets.SCRAPY_MAIL_PORT }}
         SCRAPY_MAIL_USER: ${{ secrets.SCRAPY_MAIL_USER }}
         SCRAPY_MAIL_PASS: ${{ secrets.SCRAPY_MAIL_PASS }}
         SCRAPY_MAIL_FROM: ${{ secrets.SCRAPY_MAIL_FROM }}
+        # ── OpenRouter ────────────────────────────────────────────────────────
         OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         OPENROUTER_MAX_TEXT_LENGTH: ${{ secrets.OPENROUTER_MAX_TEXT_LENGTH }}
         OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+        # ── API FastAPI (Vercel) ───────────────────────────────────────────────
+        API_BASE_URL: ${{ secrets.API_BASE_URL }}
+        API_SECRET_KEY: ${{ secrets.API_SECRET_KEY }}
       run: |
-        scrapy crawl edital -s EDITAIS_DB_PATH=./editais.db -O output.json -L INFO
+        scrapy crawl edital -O output.json -L INFO
     
     - name: Upload scraped data
       uses: actions/upload-artifact@v6
       if: always()
       with:
         name: scrapy-output-${{ github.run_number }}
-        path: |
-          output.json
-          editais.db
+        path: output.json

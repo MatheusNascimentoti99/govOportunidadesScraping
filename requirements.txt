@@ -1,7 +1,23 @@
-pymongo==4.15.3
+# Scrapy core
 scrapy==2.15.2
 twisted==24.3.0
 pdfplumber==0.11.7
-scrapyd==1.6.0
 python-dotenv==1.1.1
 requests>=2.31.0
+itemadapter>=0.7.0
+
+# FastAPI & server (Vercel / local)
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+pydantic[email]>=2.0.0
+
+# Database (PostgreSQL via Supabase / Neon)
+psycopg2-binary>=2.9.9
+
+# HTTP client assíncrono
+httpx>=0.27.0
+
+# Utilities
+pymongo==4.15.3
+scrapyd==1.6.0

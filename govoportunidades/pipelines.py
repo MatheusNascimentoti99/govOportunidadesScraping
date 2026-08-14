@@ -329,3 +329,169 @@ class OpenRouterResumePipeline:
         response.raise_for_status()
         data = response.json()
         return data["choices"][0]["message"]["content"].strip()
+
+
+class SubscriberNotificationPipeline:
+    """
+    Pipeline de notificação baseado em assinantes cadastrados via API.
+
+    O scraper não envia e-mails diretamente via SMTP; ele apenas identifica
+    as oportunidades que casam com as palavras-chave dos assinantes e despacha
+    a notificação para o endpoint interno da API FastAPI, que realiza a
+    deduplicação e o envio assíncrono (BackgroundTasks) incluindo o link individual
+    de desinscrição (unsubscribe).
+
+    Fluxo:
+      1. ``open_spider``: busca a lista de assinantes ativos em
+         ``GET /api/internal/subscribers`` (autenticado por X-API-Key).
+      2. ``process_item``: para cada item com ``matched_keywords``, identifica
+         os assinantes interessados e chama ``POST /api/internal/notifications/send``.
+
+    Variáveis de ambiente necessárias:
+      - API_BASE_URL   – URL base da API FastAPI (ex: http://localhost:8000 ou https://seu-app.vercel.app)
+      - API_SECRET_KEY – Chave secreta para autenticação nas rotas internas
+    """
+
+    def __init__(
+        self,
+        api_base_url: str,
+        api_secret_key: str,
+    ):
+        self.api_base_url = api_base_url.rstrip("/")
+        self.api_secret_key = api_secret_key
+        self.subscribers: list[dict] = []
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        import os
+        return cls(
+            api_base_url=os.getenv("API_BASE_URL", crawler.settings.get("API_BASE_URL", "")),
+            api_secret_key=os.getenv("API_SECRET_KEY", crawler.settings.get("API_SECRET_KEY", "")),
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Spider lifecycle
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def open_spider(self, spider):
+        """Obtém a lista de assinantes ativos da API antes de iniciar o crawl."""
+        if not self.api_base_url or not self.api_secret_key:
+            spider.logger.warning(
+                "SubscriberNotificationPipeline: API_BASE_URL ou API_SECRET_KEY "
+                "não configurados. Pipeline desabilitado."
+            )
+            return
+
+        url = f"{self.api_base_url}/api/internal/subscribers"
+        try:
+            resp = requests.get(
+                url,
+                headers={"X-API-Key": self.api_secret_key},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            self.subscribers = data.get("subscribers", [])
+            spider.logger.info(
+                f"SubscriberNotificationPipeline: {len(self.subscribers)} assinante(s) carregado(s)."
+            )
+        except Exception as e:
+            spider.logger.error(
+                f"SubscriberNotificationPipeline: falha ao buscar assinantes: {e}"
+            )
+            self.subscribers = []
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Item processing
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def process_item(self, item, spider):
+        if not self.subscribers:
+            return item
+
+        adapter = ItemAdapter(item)
+        item_keywords: list[str] = [
+            kw.strip().lower() for kw in (adapter.get("matched_keywords") or []) if kw and kw.strip()
+        ]
+        if not item_keywords:
+            text_l = (adapter.get("text") or "").lower()
+            all_sub_kws = {
+                kw.strip().lower()
+                for sub in self.subscribers
+                for kw in sub.get("keywords", [])
+                if kw and kw.strip()
+            }
+            item_keywords = [kw for kw in all_sub_kws if kw in text_l]
+            if item_keywords:
+                adapter["matched_keywords"] = item_keywords
+
+        if not item_keywords:
+            return item
+
+        url = adapter.get("url") or ""
+        text = adapter.get("text") or ""
+        summary = adapter.get("summary") or ""
+
+        for subscriber in self.subscribers:
+            email: str = subscriber["email"]
+            sub_keywords: list[str] = [
+                kw.strip().lower() for kw in subscriber.get("keywords", []) if kw and kw.strip()
+            ]
+
+            # Verifica se alguma keyword do assinante bate com o edital
+            matching = [kw for kw in sub_keywords if kw in item_keywords]
+            if not matching:
+                continue
+
+            # Despacha notificação para a API (envio assíncrono com dedup e token de unsubscribe)
+            self._dispatch_notification(url, email, matching, summary, text, spider)
+
+        return item
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Helpers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _dispatch_notification(
+        self,
+        edital_url: str,
+        subscriber_email: str,
+        matched_keywords: list[str],
+        summary: str,
+        text: str,
+        spider,
+    ) -> bool:
+        """Despacha a notificação para a API FastAPI."""
+        endpoint = f"{self.api_base_url}/api/internal/notifications/send"
+        payload = {
+            "edital_url": edital_url,
+            "subscriber_email": subscriber_email,
+            "matched_keywords": matched_keywords,
+            "summary": summary,
+            "text": text[:500] if text else "",
+        }
+        try:
+            resp = requests.post(
+                endpoint,
+                headers={"X-API-Key": self.api_secret_key, "Content-Type": "application/json"},
+                data=json.dumps(payload),
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            status_val = data.get("status")
+            if status_val == "already_sent":
+                spider.logger.debug(
+                    f"SubscriberNotificationPipeline: [{subscriber_email}] já notificado para {edital_url}. Pulando."
+                )
+            elif status_val == "queued":
+                spider.logger.info(
+                    f"SubscriberNotificationPipeline: notificação enfileirada na API para [{subscriber_email}] ({edital_url})."
+                )
+            return True
+        except Exception as e:
+            spider.logger.error(
+                f"SubscriberNotificationPipeline: falha ao despachar notificação para [{subscriber_email}]: {e}"
+            )
+            return False
+

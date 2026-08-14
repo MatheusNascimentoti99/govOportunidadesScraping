@@ -65,11 +65,16 @@ DOWNLOAD_DELAY = 2
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
-   "govoportunidades.pipelines.NotificationDedupPipeline": 150,
-   "govoportunidades.pipelines.SQLitePipeline": 200,
-   "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
-   "govoportunidades.pipelines.NotificationPipeline": 300,
-   # "govoportunidades.pipelines.MongoDBPipeline": 400,
+    # Pipeline de sumarização com IA (opcional, requer OPENROUTER_API_KEY)
+    "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
+    # Pipeline API-centric (busca assinantes ativos via API, verifica dedup e envia notificações)
+    "govoportunidades.pipelines.SubscriberNotificationPipeline": 350,
+
+    # Pipelines legados baseados em SQLite / notificação estática:
+    # "govoportunidades.pipelines.NotificationDedupPipeline": 150,
+    # "govoportunidades.pipelines.SQLitePipeline": 200,
+    # "govoportunidades.pipelines.NotificationPipeline": 300,
+    # "govoportunidades.pipelines.MongoDBPipeline": 400,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
@@ -117,3 +122,7 @@ EDITAIS_DB_PATH = os.getenv("EDITAIS_DB_PATH", "editais.db")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free")
 OPENROUTER_MAX_TEXT_LENGTH = int(os.getenv("OPENROUTER_MAX_TEXT_LENGTH", "4000"))
+
+# API FastAPI (Vercel) – configurações para o SubscriberNotificationPipeline
+API_BASE_URL = os.getenv("API_BASE_URL", "").strip()
+API_SECRET_KEY = os.getenv("API_SECRET_KEY", "").strip()
