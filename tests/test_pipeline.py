@@ -208,3 +208,29 @@ def test_send_email_smtp_failure_returns_false(pipeline, mock_spider):
         )
     assert result is False
     mock_spider.logger.error.assert_called_once()
+
+
+def test_process_item_matches_keywords_from_text_automatically(pipeline, mock_spider):
+    """Quando matched_keywords não está presente, extrai do texto usando palavras-chave dos assinantes."""
+    pipeline.subscribers = FAKE_SUBSCRIBERS
+    # alice quer 'engenharia', 'civil'; bob quer 'ti', 'software'
+    item = EditalItem(
+        url="https://example.com/edital/101",
+        text="Vaga aberta para especialista em software e desenvolvimento.",
+    )
+
+    dedup_response = MagicMock()
+    dedup_response.json.return_value = {"already_sent": False}
+    dedup_response.raise_for_status = MagicMock()
+
+    log_response = MagicMock()
+    log_response.raise_for_status = MagicMock()
+
+    with patch("requests.post", side_effect=[dedup_response, log_response]), \
+         patch.object(pipeline, "_send_email", return_value=True) as mock_send:
+        result = pipeline.process_item(item, mock_spider)
+
+    assert "software" in result.get("matched_keywords", [])
+    mock_send.assert_called_once()
+    assert mock_send.call_args[0][0] == "bob@example.com"
+

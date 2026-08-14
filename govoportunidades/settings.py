@@ -65,13 +65,16 @@ DOWNLOAD_DELAY = 2
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
-   "govoportunidades.pipelines.NotificationDedupPipeline": 150,
-   "govoportunidades.pipelines.SQLitePipeline": 200,
-   "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
-   "govoportunidades.pipelines.NotificationPipeline": 300,
-   # Pipeline API-centric (substitui NotificationPipeline para assinantes via API)
-   # "govoportunidades.pipelines.SubscriberNotificationPipeline": 350,
-   # "govoportunidades.pipelines.MongoDBPipeline": 400,
+    # Pipeline API-centric (busca assinantes ativos via API, verifica dedup e envia notificações)
+    "govoportunidades.pipelines.SubscriberNotificationPipeline": 350,
+    # Pipeline de sumarização com IA (opcional, requer OPENROUTER_API_KEY)
+    # "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
+
+    # Pipelines legados baseados em SQLite / notificação estática:
+    # "govoportunidades.pipelines.NotificationDedupPipeline": 150,
+    # "govoportunidades.pipelines.SQLitePipeline": 200,
+    # "govoportunidades.pipelines.NotificationPipeline": 300,
+    # "govoportunidades.pipelines.MongoDBPipeline": 400,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)

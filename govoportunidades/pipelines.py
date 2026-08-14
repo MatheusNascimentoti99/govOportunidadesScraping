@@ -424,8 +424,20 @@ class SubscriberNotificationPipeline:
 
         adapter = ItemAdapter(item)
         item_keywords: list[str] = [
-            kw.lower() for kw in (adapter.get("matched_keywords") or [])
+            kw.strip().lower() for kw in (adapter.get("matched_keywords") or []) if kw and kw.strip()
         ]
+        if not item_keywords:
+            text_l = (adapter.get("text") or "").lower()
+            all_sub_kws = {
+                kw.strip().lower()
+                for sub in self.subscribers
+                for kw in sub.get("keywords", [])
+                if kw and kw.strip()
+            }
+            item_keywords = [kw for kw in all_sub_kws if kw in text_l]
+            if item_keywords:
+                adapter["matched_keywords"] = item_keywords
+
         if not item_keywords:
             return item
 
@@ -435,7 +447,9 @@ class SubscriberNotificationPipeline:
 
         for subscriber in self.subscribers:
             email: str = subscriber["email"]
-            sub_keywords: list[str] = subscriber.get("keywords", [])
+            sub_keywords: list[str] = [
+                kw.strip().lower() for kw in subscriber.get("keywords", []) if kw and kw.strip()
+            ]
 
             # Verifica se alguma keyword do assinante bate com o edital
             matching = [kw for kw in sub_keywords if kw in item_keywords]
