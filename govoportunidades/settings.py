@@ -65,10 +65,10 @@ DOWNLOAD_DELAY = 2
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
+    # Pipeline de sumarização com IA (opcional, requer OPENROUTER_API_KEY)
+    "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
     # Pipeline API-centric (busca assinantes ativos via API, verifica dedup e envia notificações)
     "govoportunidades.pipelines.SubscriberNotificationPipeline": 350,
-    # Pipeline de sumarização com IA (opcional, requer OPENROUTER_API_KEY)
-    # "govoportunidades.pipelines.OpenRouterResumePipeline": 250,
 
     # Pipelines legados baseados em SQLite / notificação estática:
     # "govoportunidades.pipelines.NotificationDedupPipeline": 150,
@@ -125,4 +125,4 @@ OPENROUTER_MAX_TEXT_LENGTH = int(os.getenv("OPENROUTER_MAX_TEXT_LENGTH", "4000")
 
 # API FastAPI (Vercel) – configurações para o SubscriberNotificationPipeline
 API_BASE_URL = os.getenv("API_BASE_URL", "").strip()
-API_SECRET_KEY = os.getenv("API_SECRET_KEY", "").strip()
+API_SECRET_KEY = os.getenv("API_SECRET_KEY", "").strip()
