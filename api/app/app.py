@@ -1,10 +1,16 @@
-"""
-app.py – Ponto de entrada da aplicação FastAPI com documentação OpenAPI completa.
-"""
+import logging
+import sys
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routes import router
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 
 tags_metadata = [
     {

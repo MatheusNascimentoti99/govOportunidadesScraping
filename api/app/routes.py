@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 import smtplib
 from datetime import datetime, timezone
@@ -42,6 +43,7 @@ from .settings import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("uvicorn.error")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -81,6 +83,7 @@ def _generate_unsubscribe_token(email: str) -> str:
 def _summarize_with_openrouter(text: str) -> str:
     """Gera resumo executivo do texto do edital via OpenRouter."""
     if not OPENROUTER_API_KEY or not text.strip():
+        logger.warning("API Key da OpenRouter não configurada ou texto vazio. Resumo não gerado.")
         return ""
 
     truncated_text = text[:OPENROUTER_MAX_TEXT_LENGTH]
@@ -120,7 +123,8 @@ def _summarize_with_openrouter(text: str) -> str:
         resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"].strip()
-    except Exception:
+    except Exception as e:
+        logger.error("Erro ao gerar resumo via OpenRouter: %s", e)
         return ""
 
 
@@ -163,24 +167,25 @@ def _send_opportunity_email(
     email: str,
     edital_url: str,
     matched_keywords: list[str],
-    summary: str,
-    text: str,
+    summary: str = "",
+    text: str = "",
 ) -> None:
     """
     Envia e-mail de notificação de oportunidade com link de unsubscribe individual.
     Gera resumo via OpenRouter na API caso não tenha sido fornecido previamente.
     """
     if not SMTP_USER or not SMTP_PASS:
+        logger.warning("Credenciais SMTP não configuradas. E-mail de oportunidade não enviado para %s", email)
         return
 
     token = get_unsubscribe_token_by_email(email)
     if not token:
+        logger.warning("Token de descadastro não encontrado para o e-mail %s. E-mail não enviado.", email)
         return
 
     keywords_str = ", ".join(matched_keywords) if matched_keywords else "geral"
     unsubscribe_url = f"{APP_BASE_URL}/api/unsubscribe?token={token}"
 
-    # Se não houver resumo prévio e houver texto, tenta resumir com OpenRouter
     final_summary = summary
     if not final_summary and text:
         final_summary = _summarize_with_openrouter(text)
