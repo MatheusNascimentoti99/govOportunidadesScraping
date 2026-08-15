@@ -1,188 +1,260 @@
 # govOportunidadesScraping
 
-Coletor (Scrapy) para identificar oportunidades governamentais (editais) no portal do SIGEPE, extrair links e texto de PDFs, filtrar por palavras‑chave e notificar por e‑mail. Possui deduplicação entre execuções (SQLite) e agendamento via cron.
+Coletor inteligente (Scrapy) e API RESTful (FastAPI) para monitorar oportunidades governamentais (editais) no portal do SIGEPE, extrair conteúdo de PDFs, gerar resumos com IA (OpenRouter), cruzar palavras-chave e notificar assinantes por e-mail com controle de desinscrição e deduplicação.
+
+[![Vercel Deployment](https://img.shields.io/badge/API%20Docs-Vercel%20Live-0070F3?style=for-the-badge&logo=vercel&logoColor=white)](https://gov-oportunidades-scraping.vercel.app/docs)
+[![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
+[![Scrapy](https://img.shields.io/badge/Scrapy-2.11+-red?style=for-the-badge&logo=scrapy)](https://scrapy.org)
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/Tests-28%20passed-success?style=for-the-badge)](tests/)
 
 <img width="1372" height="432" alt="image" src="https://github.com/user-attachments/assets/8eaef6de-88de-4976-8d78-5b6ee6178a31" />
 
+---
 
-## Visão geral
-- Spider `edital` acessa a página inicial, segue para páginas de edital e baixa o PDF associado.
-- O texto do PDF é extraído (pdfplumber) e então filtrado por palavras definidas em `.env` (KEY_WORDS).
-- Itens que casarem são persistidos em SQLite e enviados por e‑mail (MailSender do Scrapy).
-- Um controle de “vistos” evita reprocessar PDFs já lidos entre execuções.
+## 🌐 Acesso em Produção (Live Demo)
 
-## Recursos
-- Scrapy + pdfplumber para extrair texto de PDFs.
-- Filtro por palavras‑chave configurável via `.env`.
-- Deduplicação de notificação (não envia novamente para o mesmo URL).
-- Persistência em SQLite:
-  - `matching_editais` (itens que casaram com palavras-chave)
-- Agendamento via cron (script pronto com lock e logs).
+A API RESTful está publicada e em execução na **Vercel Serverless**:
 
-## Estrutura do projeto
+- 🚀 **Swagger UI (Interativo)**: [https://gov-oportunidades-scraping.vercel.app/docs](https://gov-oportunidades-scraping.vercel.app/docs)
+- 📑 **ReDoc**: [https://gov-oportunidades-scraping.vercel.app/redoc](https://gov-oportunidades-scraping.vercel.app/redoc)
+- 📋 **OpenAPI JSON Schema**: [https://gov-oportunidades-scraping.vercel.app/openapi.json](https://gov-oportunidades-scraping.vercel.app/openapi.json)
+
+---
+
+## 💡 Visão Geral da Arquitetura
+
+O sistema opera de forma desacoplada em duas frentes complementares:
+
+```
+┌────────────────────────────────────────────────────────┐
+│                   PORTAL SIGEPE                        │
+└──────────────────────────┬─────────────────────────────┘
+                           │ (Crawling & PDF download)
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│               SCRAPY SPIDER (Crawler)                  │
+│  - Extração de texto de PDFs via pdfplumber            │
+│  - Busca de assinantes na API                          │
+│  - Matching de palavras-chave                          │
+│  - Dispatch de notificações via API                    │
+└──────────────────────────┬─────────────────────────────┘
+                           │ HTTP POST (X-API-Key)
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│             FASTAPI REST API (Vercel)                  │
+│  - Gestão de Assinaturas (Subscribe / Unsubscribe)     │
+│  - Resumos automáticos com IA (OpenRouter / LLM)       │
+│  - Deduplicação e registro de histórico (PostgreSQL)   │
+│  - Disparo de e-mails via SMTP com link de descadastro │
+└────────────────────────────────────────────────────────┘
+```
+
+1. **Gestão de Assinantes**: Usuários cadastram e-mail e palavras-chave de interesse através do endpoint público `/api/subscribe`.
+2. **Coleta de Editais**: O robô Scrapy acessa a página inicial do SIGEPE, identifica novos editais publicados e efetua o download dos documentos PDF.
+3. **Extração e Inteligência Artificial**: O texto do PDF é extraído via `pdfplumber` e, caso configurado, é sintetizado em um resumo executivo por LLM via **OpenRouter**.
+4. **Matching & Deduplicação**: O pipeline cruza o texto com as palavras-chave cadastradas pelos assinantes e consulta a API para evitar envios duplicados para o mesmo edital/usuário.
+5. **Notificação por E-mail**: Notificações personalizadas são disparadas via SMTP, contendo o resumo gerado pela IA, link do edital e token exclusivo para descadastro com 1 clique.
+6. **Automação Contínua**: Execução periódica automatizada via **GitHub Actions** (sem custos) ou agendamento local via **Cron**.
+
+---
+
+## 📖 Endpoints da API
+
+A documentação interativa completa com possibilidade de testes diretos pode ser acessada em [https://gov-oportunidades-scraping.vercel.app/docs](https://gov-oportunidades-scraping.vercel.app/docs).
+
+### 🟢 Endpoints Públicos
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/api/subscribe` | Cadastra ou atualiza assinatura com e-mail e palavras-chave. Envia e-mail de confirmação. |
+| `GET` | `/api/unsubscribe` | Cancela a assinatura usando o token único recebido por e-mail (`?token=...`). |
+| `GET` | `/api/health` | Verifica a integridade e disponibilidade da API e conexão com banco de dados. |
+
+### 🔒 Endpoints Internos (Autenticação via `X-API-Key`)
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/api/internal/subscribers` | Retorna a lista de assinantes ativos e suas respectivas palavras-chave. |
+| `POST` | `/api/internal/notifications/send` | Dispara e-mail de oportunidade para o assinante com resumo de IA. |
+| `POST` | `/api/internal/notifications/check-dedup` | Verifica se um edital já foi notificado para determinado usuário. |
+| `POST` | `/api/internal/notifications/log` | Registra histórico de envio para fins de auditoria e controle de deduplicação. |
+
+---
+
+## 💻 Exemplo de Uso da API
+
+### Cadastrar interesse em palavras-chave:
+
+```bash
+curl -X POST "https://gov-oportunidades-scraping.vercel.app/api/subscribe" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "seu.email@exemplo.com",
+    "keywords": ["tecnologia", "desenvolvimento", "inteligencia artificial"]
+  }'
+```
+
+**Resposta:**
+```json
+{
+  "status": "success",
+  "message": "Inscrição realizada com sucesso. Um e-mail de confirmação foi enviado.",
+  "email": "seu.email@exemplo.com",
+  "keywords": ["tecnologia", "desenvolvimento", "inteligencia artificial"]
+}
+```
+
+---
+
+## 📁 Estrutura do Projeto
+
 ```
 . 
-├─ api/                      # API RESTful FastAPI (Vercel Serverless / Docker)
-│  ├─ app/
-│  │  ├─ app.py              # Instância FastAPI com tags e OpenAPI
-│  │  ├─ routes.py           # Endpoints públicos e internos
-│  │  ├─ schemas.py          # Schemas Pydantic com descrições e validação
-│  │  ├─ models.py           # Camada PostgreSQL e gerenciamento de banco
-│  │  └─ settings.py         # Configurações via variáveis de ambiente
-│  └─ index.py               # Ponto de entrada Vercel ASGI
-├─ docs/
-│  └─ API.md                 # Guia completo da API RESTful para terceiros
-├─ govoportunidades/
-│  ├─ spiders/
-│  │  └─ edital.py          # Spider principal
-│  ├─ items.py               # Itens: EditalExtractor (url, text)
-│  ├─ pipelines.py           # Pipelines: dedupe, API subscriber dispatch
-│  └─ settings.py            # Settings (dotenv, e-mail, keywords, pipelines)
-├─ requirements.txt          # Dependências
-├─ vercel.json               # Configuração serverless Vercel
-├─ Dockerfile                # Build e execução da API e do spider no container
-├─ docker-compose.yml        # PostgreSQL + API FastAPI local
-├─ scripts/
-│  └─ run_crawl.sh           # Script para cron (lock, logs, export)
-├─ CRON.md                   # Guia de agendamento no cron
-└─ README.md                 # Este arquivo
+├── api/                          # Aplicação FastAPI (Vercel Serverless / Docker)
+│   ├── app/
+│   │   ├── app.py                # Configuração do FastAPI, OpenAPI tags e CORS
+│   │   ├── routes.py             # Endpoints públicos e protegidos + IA OpenRouter
+│   │   ├── schemas.py            # Schemas Pydantic com validação de dados
+│   │   ├── models.py             # Camada de banco de dados PostgreSQL
+│   │   └── settings.py           # Variáveis de ambiente da API
+│   └── index.py                  # Ponto de entrada ASGI para Vercel
+├── govoportunidades/             # Scraper Scrapy
+│   ├── spiders/
+│   │   └── edital.py             # Spider para o portal de editais SIGEPE
+│   ├── items.py                  # Definição de itens do Scrapy
+│   ├── pipelines.py              # Pipelines de deduplicação, SQLite e API dispatch
+│   └── settings.py               # Configurações do Scrapy
+├── tests/                        # Bateria de testes automatizados (pytest)
+│   ├── test_api.py               # Testes de integração da API
+│   └── test_pipeline.py          # Testes dos pipelines Scrapy
+├── scripts/
+│   └── run_crawl.sh              # Script de execução para cron com locks e logs
+├── .github/workflows/
+│   └── job.yml                   # Execução automatizada diária via GitHub Actions
+├── docker-compose.yml            # PostgreSQL + API FastAPI para ambiente local
+├── Dockerfile                    # Container Docker para a API e Scraper
+├── vercel.json                   # Configuração de build serverless para Vercel
+├── requirements.txt              # Dependências Python
+└── README.md                     # Este arquivo
 ```
 
-## 📖 Documentação da API
-A API RESTful FastAPI possui documentação interativa integrada e guia detalhado:
-- 📘 **Guia Completo de Integração**: Consulte [docs/API.md](docs/API.md) para detalhes de schemas, autenticação (`X-API-Key`) e exemplos cURL.
-- 🚀 **Swagger UI (Interativo)**: `http://localhost:8000/docs` (ou na Vercel `/docs`)
-- 📑 **ReDoc**: `http://localhost:8000/redoc` (ou na Vercel `/redoc`)
+---
 
+## 🛠️ Como Executar Localmente
 
-## Requisitos
+### Pré-requisitos
 - Python 3.10+
-- Linux/macOS (Windows via WSL/Docker)
+- Docker & Docker Compose (opcional, para rodar API e PostgreSQL locais)
 
-## Como começar (Instalação local)
+### 1. Clonar o repositório
 
-1. **Clone ou faça um fork do repositório:**
 ```bash
-git clone https://github.com/SEU_USUARIO/govOportunidadesScraping.git
+git clone https://github.com/MatheusNascimentoti99/govOportunidadesScraping.git
 cd govOportunidadesScraping
 ```
 
-2. **Crie e ative um ambiente virtual:**
+### 2. Configurar o ambiente virtual
+
 ```bash
 python -m venv .venv
 
-# No Linux/macOS
+# Linux / macOS
 source .venv/bin/activate
 
-# No Windows
+# Windows
 .venv\Scripts\activate
-```
 
-3. **Instale as dependências:**
-```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-4. **Configuração (.env):**
-Copie o arquivo de exemplo para criar o seu arquivo `.env`:
-```bash
-# No Linux/macOS
-cp .env.example .env
+### 3. Configurar variáveis de ambiente (`.env`)
 
-# No Windows
-copy .env.example .env
+Copie o arquivo de exemplo:
+```bash
+cp .env.example .env
 ```
 
-Abra o arquivo `.env` recém-criado e preencha-o com suas informações (como palavras-chave, credenciais de e-mail e API do OpenRouter, se for usar sumarização). O arquivo `.env.example` já possui comentários explicando cada variável e dados de exemplo.
+Edite o `.env` preenchendo suas configurações (veja a seção [Variáveis de Ambiente](#-variáveis-de-ambiente)).
 
-## Executando
-- Execução simples (exporta JSON para `saida.json`):
-```fish
+---
+
+### 4. Executando com Docker Compose (API + PostgreSQL)
+
+Para subir o banco de dados PostgreSQL e a API FastAPI localmente:
+
+```bash
+docker compose up -d
+```
+
+Acesse a documentação local em: `http://localhost:8000/docs`
+
+---
+
+### 5. Executando o Crawler (Scrapy)
+
+Para rodar o spider localmente e exportar o resultado para um arquivo JSON:
+
+```bash
 scrapy crawl edital -O saida.json -L INFO
 ```
 
-Observações importantes:
-- Por padrão `ROBOTSTXT_OBEY = True`. Se a origem bloquear o scraping via robots.txt, o spider respeitará.
-- O `NotificationDedupPipeline` descarta itens cujo URL já está em `matching_editais` (evita reenvio de e-mail).
+---
 
-## GitHub Actions (Execução automatizada e gratuita)
+### 6. Executando os Testes Automatizados
 
-O projeto já inclui um workflow (`.github/workflows/job.yml`) para rodar o coletor de forma automática no GitHub Actions.
+O projeto conta com suite de testes completa cobrindo endpoints, autenticação e pipelines:
 
-**Passo a passo para ativar:**
-1. Faça o **fork** deste repositório para a sua conta do GitHub (caso ainda não o tenha feito).
-2. Acesse a aba **Settings** (Configurações) do seu repositório.
-3. No menu lateral, acesse **Secrets and variables** > **Actions**.
-4. Clique no botão **New repository secret** e cadastre as credenciais do seu projeto (as mesmas do `.env` local):
-   - `SCRAPY_KEY_WORDS`
-   - `SCRAPY_MAIL_TO`
-   - `SCRAPY_MAIL_HOST`
-   - `SCRAPY_MAIL_PORT`
-   - `SCRAPY_MAIL_USER`
-   - `SCRAPY_MAIL_PASS`
-   - `SCRAPY_MAIL_FROM`
-   - *(Opcional - caso use sumarização)*: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` e `OPENROUTER_MAX_TEXT_LENGTH`.
-5. Acesse a aba **Actions** no topo do repositório e confirme a ativação dos fluxos, clicando no botão verde se for solicitado.
-6. **Agendamento padrão:** O scraper roda todos os dias às 10:00 da manhã (13:00 UTC).
-7. **Execução manual:** Para testar, vá na aba **Actions**, selecione `Scrape Gov Oportunidades`, clique em **Run workflow** e rode.
-
-> **Nota:** O banco de dados SQLite (`editais.db`) será cacheado entre as execuções (evitando envios repetidos). Na página de resultados de cada execução da Action, você poderá baixar o `output.json` e o `editais.db` em **Artifacts**.
-
-## Cron (Execução local)
-Há um guia dedicado em `CRON.md` com exemplos. O script `scripts/run_crawl.sh` já implementa:
-- Lock (`.crawl.lock`) para evitar concorrência
-- Logs em `logs/cron/crawl.log`
-- Export para `out/`
-
-Exemplo (a cada 2h):
-```cron
-0 */2 * * * /bin/bash -lc 'cd /caminho/para/o/projeto && chmod +x scripts/run_crawl.sh && ./scripts/run_crawl.sh'
+```bash
+python -m pytest
 ```
 
-## Banco de dados (SQLite)
-- `matching_editais` (no pipeline): armazena URLs/texto/matched_keywords de itens que casaram.
-- Caminho configurável por `EDITAIS_DB_PATH` (padrão: `./editais.db`).
+---
 
-## Tutorial: e-mail com Gmail (SMTP)
-O Gmail não aceita mais “aplicativos menos seguros”. Para enviar e-mails via SMTP você precisa usar “Senha de app” com 2FA.
+## ⚙️ Variáveis de Ambiente
 
-Passos:
-1) Ative a verificação em duas etapas (2FA) na sua Conta Google:
-   - Acesse https://myaccount.google.com/security
-   - Em “Como você faz login no Google”, ative “Verificação em duas etapas”.
-2) Crie uma Senha de app:
-   - Ainda em https://myaccount.google.com/security, em “Como você faz login no Google”, abra “Senhas de app”.
-   - Selecione “Aplicativo: Mail” e “Dispositivo: Outro (nomeie, ex.: Scrapy)”.
-   - O Google mostrará uma senha de 16 caracteres.
-3) Configure o `.env` do projeto:
-   - SCRAPY_MAIL_HOST="smtp.gmail.com"
-   - SCRAPY_MAIL_PORT="587"
-   - SCRAPY_MAIL_USER="seu.email@gmail.com"
-   - SCRAPY_MAIL_PASS="SENHA_DE_APP_16_CARACTERES"
-   - SCRAPY_MAIL_FROM="seu.email@gmail.com"
-   - SCRAPY_MAIL_TO="destino1@exemplo.com,destino2@exemplo.com"
-4) TLS/SSL:
-   - O projeto usa TLS (porta 587) por padrão nas settings.
+| Variável | Descrição | Exemplo |
+|---|---|---|
+| `DATABASE_URL` | String de conexão do PostgreSQL | `postgresql://govuser:govpassword@localhost:5432/govdb` |
+| `API_BASE_URL` | URL base da API (local ou produção) | `https://gov-oportunidades-scraping.vercel.app` |
+| `API_SECRET_KEY` | Chave secreta compartilhada para rotas internas (`X-API-Key`) | `gerar_chave_secreta_forte` |
+| `SCRAPY_MAIL_HOST` | Host SMTP para envio de e-mails | `smtp.gmail.com` |
+| `SCRAPY_MAIL_PORT` | Porta SMTP | `587` |
+| `SCRAPY_MAIL_USER` | Usuário/E-mail remetente | `seu.email@gmail.com` |
+| `SCRAPY_MAIL_PASS` | Senha de App SMTP | `SENHA_APP_16_DIGITOS` |
+| `SCRAPY_MAIL_FROM` | E-mail exibido como remetente | `seu.email@gmail.com` |
+| `OPENROUTER_API_KEY` | *(Opcional)* Chave de API da OpenRouter para resumo com IA | `sk-or-v1-...` |
+| `OPENROUTER_MODEL` | *(Opcional)* Modelo de IA para resumos | `deepseek/deepseek-r1-0528:free` |
+| `OPENROUTER_MAX_TEXT_LENGTH` | *(Opcional)* Limite de caracteres enviados ao LLM | `4000` |
 
-Testando envio:
-- Rode o spider com `KEY_WORDS` que com certeza casem com seu conteúdo para forçar um e-mail, ou temporariamente ajuste `KEY_WORDS` e/ou um item de teste.
-- Verifique `logs/cron/crawl.log` e a caixa de saída do Gmail.
+---
 
-Erros comuns:
-- “Username and Password not accepted”: confirme 2FA e Senha de app; não use sua senha normal do Gmail.
-- “Connection refused/timeout”: verifique firewall/rede; portas 587 (TLS) liberadas.
-- “Daily user sending quota exceeded”: o Gmail impõe limites de envio.
+## 🤖 Automação no GitHub Actions
 
-## Dicas e troubleshooting
-- pdfplumber não instalado: `pip install pdfplumber` (já consta no requirements.txt).
-- Verbosidade de logs: use `-L DEBUG` para maior detalhamento.
+O repositório inclui um workflow configurado (`.github/workflows/job.yml`) para executar o coletor diariamente às 10:00 (BRT):
 
-## Desenvolvimento
-- Formato dos itens (ex.: `EditalExtractor`):
-  - `url`: URL da página principal do edital
-  - `text`: texto do PDF extraído
-- Pipelines e ordem (em `settings.py`):
-  - `NotificationDedupPipeline` (150): descarta itens já notificados
-  - `SQLitePipeline` (200): persiste matches em `matching_editais`
-  - `NotificationPipeline` (300): calcula matches e envia e-mail
+1. Faça o fork ou clone do repositório.
+2. No GitHub, vá em **Settings** > **Secrets and variables** > **Actions**.
+3. Adicione os segredos:
+   - `API_BASE_URL` (ex: `https://gov-oportunidades-scraping.vercel.app`)
+   - `API_SECRET_KEY` (chave secreta para comunicação interna)
+   - Credenciais SMTP e OpenRouter (se aplicável).
+4. O robô coletará os editais, consultará a API na Vercel e notificará os assinantes cadastrados.
+
+---
+
+## 📧 Configuração de E-mail (Gmail SMTP)
+
+Para usar uma conta Gmail como remetente:
+1. Acesse sua [Conta Google > Segurança](https://myaccount.google.com/security).
+2. Ative a **Verificação em 2 etapas**.
+3. Em [Senhas de App](https://myaccount.google.com/apppasswords), crie uma nova senha de aplicativo (ex: nomeie como `GovOportunidades`).
+4. Utilize a senha de 16 caracteres gerada na variável `SCRAPY_MAIL_PASS`.
+
+---
+
+## 📄 Licença
+
+Distribuído sob a licença MIT. Consulte `LICENSE` para obter mais informações.
+
